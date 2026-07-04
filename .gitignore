@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 .DS_Store
 .env
+telegram_config.json
+teacher_session.session
+*.bak
+*.sql

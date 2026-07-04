@@ -20,8 +20,15 @@ from docx.shared import Pt, RGBColor
 from docx.oxml.ns import qn
 
 from paste_component import global_paste
+import importlib
 import data_manager as dm
+importlib.reload(dm)
+
 import notion_sync
+importlib.reload(notion_sync)
+
+import telegram_bot as tg_bot
+importlib.reload(tg_bot)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE CONFIG
@@ -457,9 +464,19 @@ with st.sidebar:
         for s in existing_students:
             bal = dm.get_payment_balance(s["id"])
             bal_icon = "🟢" if bal["balance"] > 2 else ("🟡" if bal["balance"] > 0 else "🔴")
-            col_name, col_del = st.columns([4, 1])
+            tg_user = s.get("telegram_username", "")
+            tg_badge = f" `@{tg_user}`" if tg_user else ""
+            col_name, col_tg, col_del = st.columns([3, 1, 1])
             with col_name:
-                st.markdown(f"{bal_icon} **{s['name']}** ({s['level']})")
+                st.markdown(f"{bal_icon} **{s['name']}** ({s['level']}){tg_badge}")
+            with col_tg:
+                tg_input = st.text_input(
+                    "TG", value=tg_user, key=f"tg_{s['id']}",
+                    placeholder="@user", label_visibility="collapsed",
+                )
+                if tg_input != tg_user:
+                    dm.link_telegram(s["id"], tg_input)
+                    st.rerun()
             with col_del:
                 if st.button("🗑️", key=f"del_student_{s['id']}"):
                     dm.delete_student(s["id"])
@@ -492,6 +509,60 @@ with st.sidebar:
                 st.success(msg)
             else:
                 st.error(msg)
+
+    # ─── TELEGRAM USERBOT ────────────────────────────────────────────────
+    st.divider()
+    st.markdown("#### 🤖 Telegram Bot")
+    
+    tg_config = tg_bot.load_config()
+    
+    tg_api_id = st.text_input(
+        "API ID",
+        value=tg_config.get("api_id", ""),
+        placeholder="12345678",
+        key="tg_api_id",
+        help="Get from https://my.telegram.org",
+    )
+    tg_api_hash = st.text_input(
+        "API Hash",
+        value=tg_config.get("api_hash", ""),
+        type="password",
+        placeholder="abc123def456...",
+        key="tg_api_hash",
+        help="Get from https://my.telegram.org",
+    )
+    tg_phone = st.text_input(
+        "Phone",
+        value=tg_config.get("phone", ""),
+        placeholder="+7...",
+        key="tg_phone",
+        help="Your Telegram phone number",
+    )
+    
+    if st.button("💾 Save Telegram Config", key="save_tg_cfg", use_container_width=True):
+        # Collect monitored usernames from linked students
+        monitored = [
+            s.get("telegram_username", "")
+            for s in dm.get_students()
+            if s.get("telegram_username")
+        ]
+        tg_config.update({
+            "api_id": tg_api_id.strip(),
+            "api_hash": tg_api_hash.strip(),
+            "phone": tg_phone.strip(),
+            "ai_api_key": api_key if api_key else tg_config.get("ai_api_key", ""),
+            "ai_provider": provider,
+            "notion_token": notion_token if notion_token else tg_config.get("notion_token", ""),
+            "notion_db_id": notion_db_id if notion_db_id else tg_config.get("notion_db_id", ""),
+            "monitored_usernames": monitored,
+        })
+        tg_bot.save_config(tg_config)
+        st.success("✅ Telegram config saved!")
+    
+    st.caption(
+        "⚡ Запуск бота: `python telegram_bot.py`\n"
+        "Бот мониторит сообщения от привязанных учеников."
+    )
 
     st.divider()
     st.markdown(
@@ -543,6 +614,7 @@ tabs = st.tabs([
     "💰 Payments",
     "📝 Homework Check",
     "📚 Materials",
+    "🎧 Listening",
 ])
 
 
@@ -1286,172 +1358,556 @@ with tabs[7]:
     st.markdown("### 📝 AI Homework Checker")
     st.markdown(
         "<p style='color:#94a3b8;'>Paste the assignment and the student's answer. "
-        "AI will check it, find errors, grade it, and provide recommendations.</p>",
+        "AI will check it, find errors, grade it, and provide recommendations. "
+        "You can also send homework via Telegram bot and see bot check results below.</p>",
         unsafe_allow_html=True,
     )
 
-    hw_col1, hw_col2 = st.columns(2, gap="large")
+    # ─── Send Homework via Telegram Bot ──────────────────────────────────
+    with st.expander("📤 Send Homework to Student (Telegram)", expanded=False):
+        hw_students = dm.get_students()
+        tg_linked = [s for s in hw_students if s.get("telegram_username")]
 
-    with hw_col1:
-        st.markdown("##### 📋 Assignment")
-        hw_assignment = st.text_area(
-            "Task / Exercise",
-            height=200,
-            placeholder="e.g. Fill in the blanks with the correct form of the verb...\n1. She ___ (go) to school every day.\n2. They ___ (not/like) spicy food.",
-            key="hw_assignment",
-        )
-
-    with hw_col2:
-        st.markdown("##### ✍️ Student's Answer")
-        hw_answer = st.text_area(
-            "Student's response",
-            height=200,
-            placeholder="1. goes\n2. doesn't like",
-            key="hw_answer",
-        )
-
-    # Option to upload handwritten answer as image
-    hw_image = st.file_uploader(
-        "📷 Or upload a photo of handwritten answers",
-        type=["jpg", "jpeg", "png", "webp"],
-        key="hw_image_upload",
-    )
-
-    col_hw_btn, _ = st.columns([1, 4])
-    with col_hw_btn:
-        hw_check_btn = st.button("🔍 Check Homework", key="hw_check_btn")
-
-    if hw_check_btn:
-        if not require_api_key():
-            st.stop()
-
-        has_text_answer = bool(hw_answer.strip())
-        has_image_answer = hw_image is not None
-
-        if not hw_assignment.strip():
-            st.error("Please provide the assignment/task.")
-        elif not has_text_answer and not has_image_answer:
-            st.error("Please provide the student's answer (text or image).")
+        if not tg_linked:
+            st.info("👈 Link students to Telegram usernames in the sidebar first.")
         else:
-            with st.spinner("AI is checking the homework..."):
-                hw_prompt = (
-                    f"You are a professional English teacher checking homework.\n"
-                    f"Student Level: {level_code}\n\n"
-                    f"ASSIGNMENT:\n\"\"\"\n{hw_assignment}\n\"\"\"\n\n"
+            col_hw_student, col_hw_due = st.columns([3, 1])
+            with col_hw_student:
+                hw_tg_student = st.selectbox(
+                    "Student",
+                    options=tg_linked,
+                    format_func=lambda s: f"{s['name']} (@{s.get('telegram_username', '')})",
+                    key="hw_tg_student",
                 )
-                if has_text_answer:
-                    hw_prompt += f"STUDENT'S ANSWER:\n\"\"\"\n{hw_answer}\n\"\"\"\n\n"
-                if has_image_answer:
-                    hw_prompt += "The student's handwritten answer is attached as an image. Please read and check it.\n\n"
+            with col_hw_due:
+                hw_due_date = st.date_input("Due date", key="hw_due_date")
 
-                hw_prompt += (
-                    "Please provide a clear markdown response:\n"
-                    "1. **Grade**: X/10\n"
-                    "2. **Correct Answers**: Show the correct version\n"
-                    "3. **Errors Found**: List each mistake with explanation\n"
-                    "4. **Corrected Version**: The student's answer with all fixes applied\n"
-                    "5. **Recommendations**: Tips for improvement\n"
-                    "Keep it friendly and encouraging. Do NOT use JSON."
-                )
-                try:
-                    if has_image_answer:
-                        img_b64 = image_to_base64(hw_image)
-                        raw = call_vision_ai(hw_prompt, img_b64, st.session_state.api_key, provider)
-                    else:
-                        raw = call_text_ai(hw_prompt, st.session_state.api_key, provider)
+            hw_tg_assignment = st.text_area(
+                "Assignment text",
+                height=150,
+                placeholder="e.g. Fill in the blanks with the correct form of the verb...\n1. She ___ (go) to school every day.",
+                key="hw_tg_assignment",
+            )
 
-                    st.markdown("---")
-                    st.markdown(raw)
-
-                    docx_data = create_docx(raw)
-                    st.download_button(
-                        label="⬇️ Download Check Result as Docx",
-                        data=docx_data,
-                        file_name="homework_check.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            if st.button("📤 Send via Telegram", key="send_hw_tg_btn", use_container_width=True):
+                if not hw_tg_assignment.strip():
+                    st.error("Enter the assignment text first.")
+                else:
+                    hw_record = dm.create_homework(
+                        hw_tg_student["id"],
+                        hw_tg_assignment,
+                        hw_due_date.isoformat() if hw_due_date else "",
                     )
-                except Exception as e:
-                    st.error(f"Error checking homework: {e}")
+                    st.success(
+                        f"✅ Homework created for {hw_tg_student['name']}!\n\n"
+                        f"When the bot is running (`python telegram_bot.py`), "
+                        f"it will send this assignment to @{hw_tg_student.get('telegram_username', '')} "
+                        f"and auto-check the response."
+                    )
+                    st.rerun()
 
+    # ─── Manual Homework Check (original) ────────────────────────────────
+    with st.expander("✍️ Manual Homework Check", expanded=True):
+        hw_col1, hw_col2 = st.columns(2, gap="large")
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# TAB 9 — MATERIAL GENERATOR
-# ═══════════════════════════════════════════════════════════════════════════════
-with tabs[8]:
-    st.markdown("### 📚 Teaching Material Generator")
-    st.markdown(
-        "<p style='color:#94a3b8;'>Generate a complete study package on any topic: "
-        "grammar theory, exercises, reading tasks, and listening activities.</p>",
-        unsafe_allow_html=True,
-    )
+        with hw_col1:
+            st.markdown("##### 📋 Assignment")
+            hw_assignment = st.text_area(
+                "Task / Exercise",
+                height=200,
+                placeholder="e.g. Fill in the blanks with the correct form of the verb...\n1. She ___ (go) to school every day.\n2. They ___ (not/like) spicy food.",
+                key="hw_assignment",
+            )
 
-    mat_topic = st.text_input(
-        "📌 Lesson Topic",
-        placeholder="e.g. Modal Verbs, Present Perfect, Conditionals...",
-        key="mat_topic",
-    )
+        with hw_col2:
+            st.markdown("##### ✍️ Student's Answer")
+            hw_answer = st.text_area(
+                "Student's response",
+                height=200,
+                placeholder="1. goes\n2. doesn't like",
+                key="hw_answer",
+            )
 
-    st.markdown("##### Select material types to generate:")
-    mat_col1, mat_col2 = st.columns(2)
-    with mat_col1:
-        mat_theory = st.checkbox("📖 Grammar Reference (Theory)", value=True, key="mat_theory")
-        mat_exercises = st.checkbox("✏️ Written Exercises", value=True, key="mat_exercises")
-    with mat_col2:
-        mat_reading = st.checkbox("📰 Reading Task", value=False, key="mat_reading")
-        mat_listening = st.checkbox("🎧 Listening Activity (transcript)", value=False, key="mat_listening")
+        # Option to upload handwritten answer as image
+        hw_image = st.file_uploader(
+            "📷 Or upload a photo of handwritten answers",
+            type=["jpg", "jpeg", "png", "webp"],
+            key="hw_image_upload",
+        )
 
-    col_mat_btn, _ = st.columns([1, 4])
-    with col_mat_btn:
-        mat_gen_btn = st.button("📚 Generate Materials", key="mat_gen_btn")
+        col_hw_btn, _ = st.columns([1, 4])
+        with col_hw_btn:
+            hw_check_btn = st.button("🔍 Check Homework", key="hw_check_btn")
 
-    if mat_gen_btn:
-        if not require_api_key():
-            st.stop()
-        if not mat_topic.strip():
-            st.error("Please enter a topic.")
-        else:
-            selected = []
-            if mat_theory:
-                selected.append("A clear grammar reference / theory section explaining the rules with examples")
-            if mat_exercises:
-                selected.append("5-8 written practice exercises (fill-in-the-blank, rewrite sentences, error correction) with answer key")
-            if mat_reading:
-                selected.append("A short reading passage (150-250 words) on a related real-world topic, followed by 3-4 comprehension questions with answers")
-            if mat_listening:
-                selected.append("A simulated listening activity: a dialogue transcript (2 speakers, 150-200 words) on a related topic, followed by 3-4 comprehension questions with answers")
+        if hw_check_btn:
+            if not require_api_key():
+                st.stop()
 
-            if not selected:
-                st.warning("Select at least one material type.")
+            has_text_answer = bool(hw_answer.strip())
+            has_image_answer = hw_image is not None
+
+            if not hw_assignment.strip():
+                st.error("Please provide the assignment/task.")
+            elif not has_text_answer and not has_image_answer:
+                st.error("Please provide the student's answer (text or image).")
             else:
-                with st.spinner("Generating study materials..."):
-                    mat_prompt = (
-                        f"Create a comprehensive study material package for an English lesson.\n"
-                        f"Topic: \"{mat_topic}\"\n"
-                        f"Target Student Level: {level_code}\n"
-                        f"Context: Online lessons (Zoom, screen sharing)\n\n"
-                        f"Include the following sections:\n"
+                with st.spinner("AI is checking the homework..."):
+                    hw_prompt = (
+                        f"You are a professional English teacher checking homework.\n"
+                        f"Student Level: {level_code}\n\n"
+                        f"ASSIGNMENT:\n\"\"\"\n{hw_assignment}\n\"\"\"\n\n"
                     )
-                    for i, section in enumerate(selected, 1):
-                        mat_prompt += f"{i}. {section}\n"
+                    if has_text_answer:
+                        hw_prompt += f"STUDENT'S ANSWER:\n\"\"\"\n{hw_answer}\n\"\"\"\n\n"
+                    if has_image_answer:
+                        hw_prompt += "The student's handwritten answer is attached as an image. Please read and check it.\n\n"
 
-                    mat_prompt += (
-                        "\nFormat the output as a clean, well-structured markdown document "
-                        "with clear headings and sections. Use examples that are relevant and engaging. "
-                        "Make it ready to share with the student. Do NOT use JSON."
+                    hw_prompt += (
+                        "Please provide a clear markdown response:\n"
+                        "1. **Grade**: X/10\n"
+                        "2. **Correct Answers**: Show the correct version\n"
+                        "3. **Errors Found**: List each mistake with explanation\n"
+                        "4. **Corrected Version**: The student's answer with all fixes applied\n"
+                        "5. **Recommendations**: Tips for improvement\n"
+                        "Keep it friendly and encouraging. Do NOT use JSON."
                     )
-
                     try:
-                        raw = call_text_ai(mat_prompt, st.session_state.api_key, provider)
+                        if has_image_answer:
+                            img_b64 = image_to_base64(hw_image)
+                            raw = call_vision_ai(hw_prompt, img_b64, st.session_state.api_key, provider)
+                        else:
+                            raw = call_text_ai(hw_prompt, st.session_state.api_key, provider)
 
                         st.markdown("---")
                         st.markdown(raw)
 
                         docx_data = create_docx(raw)
                         st.download_button(
-                            label="⬇️ Download Materials as Docx",
+                            label="⬇️ Download Check Result as Docx",
                             data=docx_data,
-                            file_name=f"materials_{mat_topic.replace(' ', '_')}.docx",
+                            file_name="homework_check.docx",
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         )
                     except Exception as e:
-                        st.error(f"Error generating materials: {e}")
+                        st.error(f"Error checking homework: {e}")
+
+    # ─── Homework History from Bot ────────────────────────────────────────
+    with st.expander("📜 Homework History (Bot Results)", expanded=False):
+        all_hw = dm.get_all_homework()
+        if all_hw:
+            for hw in all_hw[:20]:
+                s_name = dm.get_student_name(hw["student_id"])
+                status_icon = {"sent": "📤", "submitted": "📥", "checked": "✅"}.get(hw["status"], "❓")
+                st.markdown(f"**{status_icon} {s_name}** — {hw.get('created_at', '')[:10]}")
+                st.markdown(f"> {hw['assignment'][:120]}...")
+                if hw["status"] == "checked" and hw.get("ai_feedback"):
+                    st.markdown(f"**Оценка:** {hw.get('grade', '—')}")
+                    with st.expander("Показать результат проверки", expanded=False):
+                        st.markdown(hw["ai_feedback"])
+                elif hw["status"] == "submitted":
+                    st.info(f"Ответ получен: {hw.get('student_answer', '')[:100]}...")
+                st.markdown("---")
+        else:
+            st.caption("No homework history yet.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 9 — MATERIAL GENERATOR (with Book Library)
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[8]:
+    st.markdown("### 📚 Teaching Material Generator")
+    st.markdown(
+        "<p style='color:#94a3b8;'>Generate materials from your uploaded textbooks or by topic. "
+        "Upload PDF/image files to your book library, then select pages to generate exercises.</p>",
+        unsafe_allow_html=True,
+    )
+
+    mat_mode = st.radio(
+        "Source",
+        ["📖 From Book Library", "✏️ By Topic (AI Generate)"],
+        horizontal=True,
+        key="mat_mode",
+    )
+
+    if mat_mode == "📖 From Book Library":
+        # ─── Book Library Management ─────────────────────────────────────
+        with st.expander("📂 Upload New Book / Material", expanded=False):
+            book_title = st.text_input("Book Title", placeholder="e.g. English File Upper-Intermediate", key="book_title")
+            book_file = st.file_uploader(
+                "Upload PDF or images",
+                type=["pdf", "jpg", "jpeg", "png", "webp"],
+                accept_multiple_files=False,
+                key="book_upload",
+            )
+
+            if st.button("📚 Add to Library", key="add_book_btn", use_container_width=True):
+                if not book_title.strip():
+                    st.error("Enter a title first.")
+                elif not book_file:
+                    st.error("Upload a file first.")
+                else:
+                    # Save file to books directory
+                    safe_name = re.sub(r'[^\w\-.]', '_', book_file.name)
+                    dest = dm.BOOKS_DIR / safe_name
+                    with open(dest, "wb") as f:
+                        f.write(book_file.getbuffer())
+
+                    file_type = "pdf" if safe_name.lower().endswith(".pdf") else "image"
+                    dm.add_book(book_title, safe_name, file_type)
+                    st.success(f"✅ Added: {book_title}")
+                    st.rerun()
+
+        # ─── Book List ───────────────────────────────────────────────────
+        books = dm.get_books()
+        if books:
+            st.markdown("#### 📖 Your Book Library")
+            for book in books:
+                col_bk, col_bk_del = st.columns([5, 1])
+                with col_bk:
+                    st.markdown(
+                        f"**{book['title']}** "
+                        f"<span class='badge badge-purple'>{book['file_type'].upper()}</span> "
+                        f"<span style='color:#64748b; font-size:0.8rem;'>{book['filename']}</span>",
+                        unsafe_allow_html=True,
+                    )
+                with col_bk_del:
+                    if st.button("🗑️", key=f"del_book_{book['id']}"):
+                        dm.delete_book(book["id"])
+                        st.rerun()
+
+            st.divider()
+
+            # ─── Generate from Book ──────────────────────────────────────
+            st.markdown("#### 🔬 Generate Exercises from Book")
+
+            selected_book = st.selectbox(
+                "Select Book",
+                options=books,
+                format_func=lambda b: b["title"],
+                key="gen_book_select",
+            )
+
+            if selected_book:
+                book_path = Path(selected_book["file_path"])
+
+                if selected_book["file_type"] == "pdf":
+                    # Extract pages from PDF
+                    try:
+                        import fitz  # PyMuPDF
+                        doc = fitz.open(str(book_path))
+                        total_pages = len(doc)
+                        st.caption(f"📄 {total_pages} pages")
+
+                        page_range = st.slider(
+                            "Page range",
+                            1, total_pages, (1, min(3, total_pages)),
+                            key="pdf_page_range",
+                        )
+
+                        # Show preview of selected pages
+                        preview_cols = st.columns(min(page_range[1] - page_range[0] + 1, 4))
+                        selected_page_images = []
+                        for i, pg_num in enumerate(range(page_range[0] - 1, page_range[1])):
+                            page = doc[pg_num]
+                            pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+                            img_bytes = pix.tobytes("png")
+                            selected_page_images.append(img_bytes)
+                            with preview_cols[i % 4]:
+                                st.image(img_bytes, caption=f"Page {pg_num + 1}", use_container_width=True)
+                        doc.close()
+                    except Exception as e:
+                        st.error(f"Error reading PDF: {e}")
+                        selected_page_images = []
+                else:
+                    # Image file — just show it
+                    if book_path.exists():
+                        img_data = book_path.read_bytes()
+                        st.image(img_data, caption=selected_book["title"], use_container_width=False, width=400)
+                        selected_page_images = [img_data]
+                    else:
+                        st.error("File not found.")
+                        selected_page_images = []
+
+                gen_type = st.multiselect(
+                    "What to generate:",
+                    ["📖 Grammar Theory", "✏️ Written Exercises", "📰 Reading Comprehension", "🧠 Quiz"],
+                    default=["✏️ Written Exercises"],
+                    key="gen_from_book_types",
+                )
+
+                if st.button("🔬 Generate from Selected Pages", key="gen_from_book_btn", use_container_width=True):
+                    if not require_api_key():
+                        st.stop()
+                    if not selected_page_images:
+                        st.error("No pages selected.")
+                    else:
+                        with st.spinner("AI is analyzing the textbook pages..."):
+                            gen_prompt = (
+                                f"Analyze this textbook page and generate teaching materials.\n"
+                                f"Target Student Level: {level_code}\n"
+                                f"Context: Online lessons (Zoom, screen sharing)\n\n"
+                                f"Generate the following:\n"
+                            )
+                            for gt in gen_type:
+                                gen_prompt += f"- {gt}\n"
+                            gen_prompt += (
+                                "\nBased on the content visible in the image, create relevant exercises "
+                                "and materials. Include answer keys. Format as clean markdown."
+                            )
+
+                            try:
+                                # Use the first page image for vision AI
+                                img_b64 = base64.b64encode(selected_page_images[0]).decode("utf-8")
+                                raw = call_vision_ai(gen_prompt, img_b64, st.session_state.api_key, provider)
+
+                                st.markdown("---")
+                                st.markdown(raw)
+
+                                docx_data = create_docx(raw)
+                                st.download_button(
+                                    label="⬇️ Download as Docx",
+                                    data=docx_data,
+                                    file_name=f"exercises_{selected_book['title'].replace(' ', '_')}.docx",
+                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                )
+                            except Exception as e:
+                                st.error(f"Error generating materials: {e}")
+        else:
+            st.info("📚 No books in the library yet. Upload one above to get started!")
+
+    else:
+        # ─── Original Topic-Based Generation ─────────────────────────────
+        mat_topic = st.text_input(
+            "📌 Lesson Topic",
+            placeholder="e.g. Modal Verbs, Present Perfect, Conditionals...",
+            key="mat_topic",
+        )
+
+        st.markdown("##### Select material types to generate:")
+        mat_col1, mat_col2 = st.columns(2)
+        with mat_col1:
+            mat_theory = st.checkbox("📖 Grammar Reference (Theory)", value=True, key="mat_theory")
+            mat_exercises = st.checkbox("✏️ Written Exercises", value=True, key="mat_exercises")
+        with mat_col2:
+            mat_reading = st.checkbox("📰 Reading Task", value=False, key="mat_reading")
+            mat_listening = st.checkbox("🎧 Listening Activity (transcript)", value=False, key="mat_listening")
+
+        col_mat_btn, _ = st.columns([1, 4])
+        with col_mat_btn:
+            mat_gen_btn = st.button("📚 Generate Materials", key="mat_gen_btn")
+
+        if mat_gen_btn:
+            if not require_api_key():
+                st.stop()
+            if not mat_topic.strip():
+                st.error("Please enter a topic.")
+            else:
+                selected = []
+                if mat_theory:
+                    selected.append("A clear grammar reference / theory section explaining the rules with examples")
+                if mat_exercises:
+                    selected.append("5-8 written practice exercises (fill-in-the-blank, rewrite sentences, error correction) with answer key")
+                if mat_reading:
+                    selected.append("A short reading passage (150-250 words) on a related real-world topic, followed by 3-4 comprehension questions with answers")
+                if mat_listening:
+                    selected.append("A simulated listening activity: a dialogue transcript (2 speakers, 150-200 words) on a related topic, followed by 3-4 comprehension questions with answers")
+
+                if not selected:
+                    st.warning("Select at least one material type.")
+                else:
+                    with st.spinner("Generating study materials..."):
+                        mat_prompt = (
+                            f"Create a comprehensive study material package for an English lesson.\n"
+                            f"Topic: \"{mat_topic}\"\n"
+                            f"Target Student Level: {level_code}\n"
+                            f"Context: Online lessons (Zoom, screen sharing)\n\n"
+                            f"Include the following sections:\n"
+                        )
+                        for i, section in enumerate(selected, 1):
+                            mat_prompt += f"{i}. {section}\n"
+
+                        mat_prompt += (
+                            "\nFormat the output as a clean, well-structured markdown document "
+                            "with clear headings and sections. Use examples that are relevant and engaging. "
+                            "Make it ready to share with the student. Do NOT use JSON."
+                        )
+
+                        try:
+                            raw = call_text_ai(mat_prompt, st.session_state.api_key, provider)
+
+                            st.markdown("---")
+                            st.markdown(raw)
+
+                            docx_data = create_docx(raw)
+                            st.download_button(
+                                label="⬇️ Download Materials as Docx",
+                                data=docx_data,
+                                file_name=f"materials_{mat_topic.replace(' ', '_')}.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            )
+                        except Exception as e:
+                            st.error(f"Error generating materials: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 10 — LISTENING ACTIVITY
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[9]:
+    st.markdown("### 🎧 Listening Activity")
+    st.markdown(
+        "<p style='color:#94a3b8;'>Upload audio files from your textbooks or the internet. "
+        "Students can listen and complete comprehension exercises. "
+        "You can also generate questions based on the audio topic.</p>",
+        unsafe_allow_html=True,
+    )
+
+    # ─── Upload Audio Files ──────────────────────────────────────────────
+    with st.expander("📂 Upload Audio File", expanded=False):
+        audio_title = st.text_input(
+            "Audio Title",
+            placeholder="e.g. Unit 3 - Dialogue at the Airport",
+            key="audio_title",
+        )
+        audio_topic = st.text_input(
+            "Topic / Description",
+            placeholder="e.g. Travel vocabulary, asking for directions",
+            key="audio_topic",
+        )
+        audio_level = st.selectbox(
+            "Level",
+            ["A1", "A2", "B1", "B2", "C1", "C2"],
+            index=3,
+            key="audio_level",
+        )
+
+        # Optionally link to a book
+        audio_books = dm.get_books()
+        audio_book_id = ""
+        if audio_books:
+            link_book = st.selectbox(
+                "Link to book (optional)",
+                options=[{"id": "", "title": "— None —"}] + audio_books,
+                format_func=lambda b: b["title"],
+                key="audio_link_book",
+            )
+            audio_book_id = link_book["id"] if link_book["id"] else ""
+
+        audio_file = st.file_uploader(
+            "Upload audio",
+            type=["mp3", "wav", "ogg", "m4a", "flac"],
+            key="audio_file_upload",
+        )
+
+        if st.button("🎵 Add Audio", key="add_audio_btn", use_container_width=True):
+            if not audio_title.strip():
+                st.error("Enter an audio title first.")
+            elif not audio_file:
+                st.error("Upload an audio file first.")
+            else:
+                safe_name = re.sub(r'[^\w\-.]', '_', audio_file.name)
+                dest = dm.AUDIO_DIR / safe_name
+                with open(dest, "wb") as f:
+                    f.write(audio_file.getbuffer())
+                dm.add_audio_file(audio_title, safe_name, audio_book_id, audio_topic, audio_level)
+                st.success(f"✅ Added: {audio_title}")
+                st.rerun()
+
+    # ─── Audio Library & Player ──────────────────────────────────────────
+    audio_files = dm.get_audio_files()
+
+    if audio_files:
+        st.markdown("#### 🎵 Audio Library")
+
+        # Filter by level
+        filter_levels = st.multiselect(
+            "Filter by level",
+            ["A1", "A2", "B1", "B2", "C1", "C2"],
+            default=[],
+            key="audio_filter_level",
+        )
+
+        filtered = audio_files
+        if filter_levels:
+            filtered = [a for a in audio_files if a.get("level", "") in filter_levels]
+
+        for audio in filtered:
+            with st.container():
+                st.markdown(
+                    f"<div class='card'>"
+                    f"<div style='display:flex; justify-content:space-between; align-items:center;'>"
+                    f"<div>"
+                    f"<span style='font-size:1.2rem; font-weight:700; color:#c084fc;'>🎧 {audio['title']}</span><br>"
+                    f"<span style='color:#94a3b8; font-size:0.85rem;'>"
+                    f"{audio.get('topic', '')} "
+                    f"<span class='badge badge-purple'>{audio.get('level', '')}</span>"
+                    f"</span>"
+                    f"</div>"
+                    f"</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+                audio_path = Path(audio["file_path"])
+                if audio_path.exists():
+                    audio_bytes = audio_path.read_bytes()
+                    st.audio(audio_bytes, format=f"audio/{audio_path.suffix.lstrip('.')}")
+
+                    col_gen_q, col_dl, col_del_audio = st.columns([2, 1, 1])
+                    with col_gen_q:
+                        if st.button("🧠 Generate Questions", key=f"gen_q_{audio['id']}"):
+                            if not require_api_key():
+                                st.stop()
+                            with st.spinner("Generating listening comprehension questions..."):
+                                q_prompt = (
+                                    f"Create a listening comprehension exercise for English students.\n"
+                                    f"Audio Topic: \"{audio.get('topic', audio['title'])}\"\n"
+                                    f"Student Level: {audio.get('level', 'B2')}\n\n"
+                                    f"Generate:\n"
+                                    f"1. 5 pre-listening discussion questions\n"
+                                    f"2. 5 while-listening comprehension questions (True/False and multiple choice)\n"
+                                    f"3. 3 post-listening discussion prompts\n"
+                                    f"4. Answer key\n\n"
+                                    f"Format as clean markdown. Make questions engaging and level-appropriate."
+                                )
+                                try:
+                                    raw = call_text_ai(q_prompt, st.session_state.api_key, provider)
+                                    st.markdown("---")
+                                    st.markdown(raw)
+
+                                    docx_data = create_docx(raw)
+                                    st.download_button(
+                                        label="⬇️ Download Questions as Docx",
+                                        data=docx_data,
+                                        file_name=f"listening_{audio['title'].replace(' ', '_')}.docx",
+                                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                        key=f"dl_q_{audio['id']}",
+                                    )
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+
+                    with col_dl:
+                        st.download_button(
+                            label="⬇️ Download Audio",
+                            data=audio_bytes,
+                            file_name=audio["filename"],
+                            mime=f"audio/{audio_path.suffix.lstrip('.')}",
+                            key=f"dl_audio_{audio['id']}",
+                        )
+                    with col_del_audio:
+                        if st.button("🗑️ Delete", key=f"del_audio_{audio['id']}"):
+                            dm.delete_audio_file(audio["id"])
+                            st.rerun()
+                else:
+                    st.warning(f"⚠️ File not found: {audio['filename']}")
+                st.markdown("")
+    else:
+        st.markdown(
+            "<div style='border:2px dashed rgba(139,92,246,0.3); border-radius:14px; "
+            "padding:32px; text-align:center; color:#475569; margin:16px 0;'>"
+            "<span style='font-size:2rem;'>🎧</span><br>"
+            "<b style='color:#94a3b8;'>No audio files yet</b><br>"
+            "<span style='font-size:0.85rem;'>Upload MP3/WAV/OGG files from your textbooks or the internet</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
