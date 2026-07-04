@@ -151,13 +151,15 @@ def record_payment(student_id: str, paid_lessons: int, amount: float = None) -> 
             "paid_lessons": curr.get("paid_lessons", 0) + paid_lessons
         }).eq("student_id", student_id).execute()
 
-def get_payment_balance(student_id: str) -> int:
-    if not supabase: return 0
+def get_payment_balance(student_id: str) -> dict:
+    if not supabase: return {"paid": 0, "conducted": 0, "balance": 0}
     res = supabase.table("payments").select("*").eq("student_id", student_id).execute()
     if res.data:
         p = res.data[0]
-        return p.get("paid_lessons", 0) - p.get("conducted_lessons", 0)
-    return 0
+        paid = p.get("paid_lessons", 0)
+        conducted = p.get("conducted_lessons", 0)
+        return {"paid": paid, "conducted": conducted, "balance": paid - conducted}
+    return {"paid": 0, "conducted": 0, "balance": 0}
 
 def get_all_payment_summaries() -> list[dict]:
     if not supabase: return []
@@ -169,10 +171,13 @@ def get_all_payment_summaries() -> list[dict]:
     for s in students:
         p = p_map.get(s["id"], {})
         conducted = p.get("conducted_lessons", 0)
-        balance = p.get("paid_lessons", 0) - conducted
+        paid = p.get("paid_lessons", 0)
+        balance = paid - conducted
         summaries.append({
             "student_id": s["id"],
             "name": s["name"],
+            "level": s.get("level", "B1"),
+            "paid": paid,
             "balance": balance,
             "conducted": conducted
         })
