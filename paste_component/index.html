@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script>
+  function sendMessageToStreamlitClient(type, data) {
+    const outData = Object.assign({
+      isStreamlitMessage: true,
+      type: type,
+    }, data);
+    window.parent.postMessage(outData, "*");
+  }
+
+  function setComponentValue(value) {
+    sendMessageToStreamlitClient("streamlit:setComponentValue", {value: value, dataType: "json"});
+  }
+
+  window.addEventListener("message", function(event) {
+    if (event.data.type === "streamlit:render") {
+      sendMessageToStreamlitClient("streamlit:setFrameHeight", {height: 0});
+      
+      // Attach paste listener to parent document if not already attached
+      try {
+          if (!window.parent._pasteAttached) {
+              window.parent._pasteAttached = true;
+              window.parent.document.addEventListener("paste", function(e) {
+                  var items = e.clipboardData.items;
+                  for (var i = 0; i < items.length; i++) {
+                      if (items[i].type.indexOf("image") !== -1) {
+                          var blob = items[i].getAsFile();
+                          var reader = new FileReader();
+                          reader.onload = function(event) {
+                              setComponentValue(event.target.result + "|paste_" + Date.now()); 
+                          };
+                          reader.readAsDataURL(blob);
+                          break; // just take the first image
+                      }
+                  }
+              });
+          }
+      } catch (err) {
+          console.warn("Could not attach to parent document", err);
+      }
+    }
+  });
+
+  sendMessageToStreamlitClient("streamlit:componentReady", {apiVersion: 1});
+</script>
+</head>
+<body></body>
+</html>
