@@ -73,8 +73,9 @@ st.markdown(
         color: #f1f5f9;
     }
 
-    /* Hide Streamlit Native Header, Footer, and Main Menu */
-    [data-testid="stHeader"] { display: none !important; }
+    /* Hide Streamlit Native Header elements but keep sidebar toggle */
+    [data-testid="stHeader"] { background-color: transparent !important; }
+    [data-testid="stToolbar"] { display: none !important; }
     footer { display: none !important; }
     #MainMenu { visibility: hidden; }
     
