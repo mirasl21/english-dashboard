@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+from datetime import datetime, date, time as dt_time, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -19,6 +20,8 @@ from docx.shared import Pt, RGBColor
 from docx.oxml.ns import qn
 
 from paste_component import global_paste
+import data_manager as dm
+import notion_sync
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE CONFIG
@@ -73,17 +76,7 @@ st.markdown(
         color: #f1f5f9;
     }
 
-    /* Hide only the right side toolbar and make header transparent to keep sidebar toggle */
-    [data-testid="stHeader"] { background-color: transparent !important; }
-    [data-testid="stToolbar"] { display: none !important; }
-    footer { display: none !important; }
-    #MainMenu { visibility: hidden; }
-    
-    /* Adjust top padding */
-    .block-container {
-        padding-top: 1rem !important;
-        padding-bottom: 2rem !important;
-    }
+    /* We intentionally leave the native header and toolbar untouched so the sidebar toggle works flawlessly. */
 
     /* Sidebar Styling */
     [data-testid="stSidebar"] {
@@ -433,21 +426,76 @@ with st.sidebar:
     )
     level_code = student_level.split("–")[0].strip()
 
+    # ─── STUDENT MANAGEMENT ──────────────────────────────────────────────
     st.divider()
-    st.markdown(
-        """
-        <div style='font-size:0.8rem; color:#64748b; line-height:1.6; padding: 0 6px;'>
-            <b style='color:#a78bfa;'>Dashboard Guide:</b><br>
-            1. Select AI backend & enter key<br>
-            2. Choose student level target<br>
-            3. Switch between workspaces below!
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.markdown("#### 👥 Students")
+    
+    existing_students = dm.get_students()
+    
+    # Show payment warnings at the top
+    pay_summaries = dm.get_all_payment_summaries()
+    urgent = [p for p in pay_summaries if p["balance"] <= 0 and p["conducted"] > 0]
+    if urgent:
+        for u in urgent:
+            st.error(f"💸 **{u['name']}** — пора платить! (баланс: {u['balance']})", icon="🔴")
+
+    # Add student form
+    with st.expander("➕ Add student", expanded=False):
+        new_name = st.text_input("Name", placeholder="e.g. Настя", key="new_student_name")
+        new_level = st.selectbox("Level", ["A1", "A2", "B1", "B2", "C1", "C2"], index=3, key="new_student_level")
+        new_contact = st.text_input("Contact", placeholder="Telegram, email...", key="new_student_contact")
+        if st.button("✅ Add", key="add_student_btn", use_container_width=True):
+            if new_name.strip():
+                dm.add_student(new_name, new_level, new_contact)
+                st.success(f"Added: {new_name}")
+                st.rerun()
+            else:
+                st.warning("Enter a name first")
+
+    # List students
+    if existing_students:
+        for s in existing_students:
+            bal = dm.get_payment_balance(s["id"])
+            bal_icon = "🟢" if bal["balance"] > 2 else ("🟡" if bal["balance"] > 0 else "🔴")
+            col_name, col_del = st.columns([4, 1])
+            with col_name:
+                st.markdown(f"{bal_icon} **{s['name']}** ({s['level']})")
+            with col_del:
+                if st.button("🗑️", key=f"del_student_{s['id']}"):
+                    dm.delete_student(s["id"])
+                    st.rerun()
+    else:
+        st.caption("No students yet. Add one above.")
+
+    # ─── NOTION INTEGRATION ──────────────────────────────────────────────
+    st.divider()
+    st.markdown("#### 📓 Notion Sync")
+    
+    notion_token = st.text_input(
+        "Notion Token",
+        type="password",
+        placeholder="secret_...",
+        key="notion_token",
+        help="Create an integration at notion.so/my-integrations",
     )
+    notion_db_id = st.text_input(
+        "Database ID",
+        placeholder="e.g. abc123def456...",
+        key="notion_db_id",
+        help="Copy the 32-character ID from your Notion database URL",
+    )
+    
+    if notion_token and notion_db_id:
+        if st.button("🔗 Test Connection", key="test_notion_btn", use_container_width=True):
+            ok, msg = notion_sync.test_notion_connection(notion_token, notion_db_id)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+
     st.divider()
     st.markdown(
-        "<div style='font-size:0.75rem; color:#475569; text-align:center;'>English Teacher Dashboard v1.1</div>",
+        "<div style='font-size:0.75rem; color:#475569; text-align:center;'>English Teacher Dashboard v2.0</div>",
         unsafe_allow_html=True,
     )
 
@@ -491,6 +539,10 @@ tabs = st.tabs([
     "📖 Vocabulary Builder",
     "📷 Textbook Scanner",
     "🗓️ Lesson Planner",
+    "📅 Schedule",
+    "💰 Payments",
+    "📝 Homework Check",
+    "📚 Materials",
 ])
 
 
@@ -968,3 +1020,438 @@ with tabs[4]:
 
                 except Exception as e:
                     st.error(f"Failed to generate lesson schedule: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 6 — SCHEDULE MANAGEMENT
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[5]:
+    st.markdown("### 📅 Lesson Schedule")
+    st.markdown(
+        "<p style='color:#94a3b8;'>Manage your lesson timetable. Add, reschedule, "
+        "cancel lessons, or paste a text message for AI to handle schedule changes.</p>",
+        unsafe_allow_html=True,
+    )
+
+    all_students = dm.get_students()
+
+    if not all_students:
+        st.info("👈 Add students in the sidebar first to start scheduling lessons.")
+    else:
+        # ─── Add New Lesson ──────────────────────────────────────────────
+        with st.expander("➕ Add New Lesson", expanded=False):
+            col_s, col_d, col_t = st.columns(3)
+            with col_s:
+                sched_student = st.selectbox(
+                    "Student",
+                    options=all_students,
+                    format_func=lambda s: f"{s['name']} ({s['level']})",
+                    key="sched_student",
+                )
+            with col_d:
+                sched_date = st.date_input("Date", key="sched_date")
+            with col_t:
+                sched_time = st.time_input("Time", value=dt_time(14, 0), key="sched_time")
+            sched_topic = st.text_input("Topic (optional)", placeholder="e.g. Modal verbs", key="sched_topic")
+
+            if st.button("📅 Add Lesson", key="add_lesson_btn", use_container_width=True):
+                lesson = dm.add_lesson(
+                    sched_student["id"],
+                    sched_date.isoformat(),
+                    sched_time.strftime("%H:%M"),
+                    sched_topic,
+                )
+                # Push to Notion if configured
+                if notion_token and notion_db_id:
+                    notion_sync.push_lesson_to_notion(
+                        notion_token, notion_db_id,
+                        sched_student["name"],
+                        sched_date.isoformat(),
+                        sched_time.strftime("%H:%M"),
+                        sched_topic,
+                    )
+                st.success(f"✅ Lesson added: {sched_student['name']} on {sched_date} at {sched_time.strftime('%H:%M')}")
+                st.rerun()
+
+        # ─── AI Schedule Parser ──────────────────────────────────────────
+        with st.expander("🤖 AI Schedule Change (text input)", expanded=False):
+            st.markdown(
+                "<p style='color:#94a3b8; font-size:0.85rem;'>"
+                "Paste a message like: <i>«Настя перенесла урок с 5 июля на 7 июля в 15:00»</i></p>",
+                unsafe_allow_html=True,
+            )
+            sched_text = st.text_area(
+                "Message",
+                placeholder="Настя перенесла урок с пятницы на воскресенье в 16:00...",
+                key="sched_ai_text",
+                height=100,
+            )
+            if st.button("🔍 Parse & Update", key="sched_ai_btn", use_container_width=True):
+                if not require_api_key():
+                    st.stop()
+                if not sched_text.strip():
+                    st.warning("Enter a message first")
+                else:
+                    student_names = [s["name"] for s in all_students]
+                    with st.spinner("AI is parsing the message..."):
+                        parse_prompt = (
+                            f"You are a scheduling assistant. Parse this message and extract schedule change information.\n"
+                            f"Known students: {', '.join(student_names)}\n"
+                            f"Today's date: {date.today().isoformat()}\n\n"
+                            f"Message: \"{sched_text}\"\n\n"
+                            f"Return a JSON object with these fields:\n"
+                            f"- student_name: string (match to one of the known students)\n"
+                            f"- action: 'reschedule' or 'cancel' or 'add'\n"
+                            f"- old_date: 'YYYY-MM-DD' (if reschedule/cancel)\n"
+                            f"- new_date: 'YYYY-MM-DD' (if reschedule/add)\n"
+                            f"- new_time: 'HH:MM' (if reschedule/add)\n"
+                            f"- topic: string (if mentioned)\n"
+                            f"Return ONLY the JSON, no extra text."
+                        )
+                        try:
+                            raw = call_text_ai(parse_prompt, st.session_state.api_key, provider)
+                            # Extract JSON from response
+                            json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+                            if json_match:
+                                parsed = json.loads(json_match.group())
+                                st.json(parsed)
+
+                                action = parsed.get("action", "")
+                                student_name = parsed.get("student_name", "")
+                                matched_student = next((s for s in all_students if s["name"].lower() == student_name.lower()), None)
+
+                                if matched_student and action == "add":
+                                    new_d = parsed.get("new_date", "")
+                                    new_t = parsed.get("new_time", "14:00")
+                                    topic = parsed.get("topic", "")
+                                    if st.button("✅ Confirm — Add this lesson", key="ai_confirm_add"):
+                                        dm.add_lesson(matched_student["id"], new_d, new_t, topic)
+                                        st.success(f"Added lesson for {student_name} on {new_d} at {new_t}")
+                                        st.rerun()
+
+                                elif matched_student and action == "reschedule":
+                                    old_d = parsed.get("old_date", "")
+                                    new_d = parsed.get("new_date", "")
+                                    new_t = parsed.get("new_time", "14:00")
+                                    # Find matching lesson
+                                    lessons = dm.get_lessons_for_student(matched_student["id"])
+                                    target = next((l for l in lessons if l["date"] == old_d and l["status"] == "scheduled"), None)
+                                    if target:
+                                        if st.button("✅ Confirm — Reschedule", key="ai_confirm_resc"):
+                                            dm.reschedule_lesson(target["id"], new_d, new_t)
+                                            st.success(f"Rescheduled {student_name}: {old_d} → {new_d} at {new_t}")
+                                            st.rerun()
+                                    else:
+                                        st.warning(f"No scheduled lesson found for {student_name} on {old_d}")
+
+                                elif matched_student and action == "cancel":
+                                    old_d = parsed.get("old_date", "")
+                                    lessons = dm.get_lessons_for_student(matched_student["id"])
+                                    target = next((l for l in lessons if l["date"] == old_d and l["status"] == "scheduled"), None)
+                                    if target:
+                                        if st.button("✅ Confirm — Cancel lesson", key="ai_confirm_cancel"):
+                                            dm.update_lesson_status(target["id"], "cancelled")
+                                            st.success(f"Cancelled lesson for {student_name} on {old_d}")
+                                            st.rerun()
+                                    else:
+                                        st.warning(f"No scheduled lesson found for {student_name} on {old_d}")
+                                else:
+                                    st.warning("Could not match the student name. Check the sidebar list.")
+                            else:
+                                st.error("AI could not parse the message. Try rephrasing.")
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+
+        # ─── Upcoming Lessons Table ──────────────────────────────────────
+        st.markdown("#### 📋 Upcoming Lessons")
+        upcoming = dm.get_upcoming_lessons()
+        if upcoming:
+            for lesson in upcoming:
+                s_name = dm.get_student_name(lesson["student_id"])
+                col_info, col_done, col_resc, col_cancel = st.columns([4, 1, 1, 1])
+                with col_info:
+                    topic_str = f" — *{lesson['topic']}*" if lesson.get("topic") else ""
+                    st.markdown(f"**{lesson['date']}** {lesson['time']} | **{s_name}**{topic_str}")
+                with col_done:
+                    if st.button("✅", key=f"done_{lesson['id']}", help="Mark as conducted"):
+                        warn = dm.mark_lesson_conducted(lesson["id"])
+                        if warn:
+                            st.toast(f"💸 {s_name} — пора платить!", icon="🔴")
+                        st.rerun()
+                with col_resc:
+                    if st.button("🔄", key=f"resc_{lesson['id']}", help="Reschedule"):
+                        st.session_state[f"resc_open_{lesson['id']}"] = True
+                        st.rerun()
+                with col_cancel:
+                    if st.button("❌", key=f"canc_{lesson['id']}", help="Cancel"):
+                        dm.update_lesson_status(lesson["id"], "cancelled")
+                        st.rerun()
+
+                # Reschedule form (inline)
+                if st.session_state.get(f"resc_open_{lesson['id']}"):
+                    rc1, rc2, rc3 = st.columns([2, 2, 1])
+                    with rc1:
+                        new_d = st.date_input("New date", key=f"new_d_{lesson['id']}")
+                    with rc2:
+                        new_t = st.time_input("New time", key=f"new_t_{lesson['id']}")
+                    with rc3:
+                        if st.button("Save", key=f"save_resc_{lesson['id']}"):
+                            dm.reschedule_lesson(lesson["id"], new_d.isoformat(), new_t.strftime("%H:%M"))
+                            del st.session_state[f"resc_open_{lesson['id']}"]
+                            st.rerun()
+        else:
+            st.info("No upcoming lessons scheduled.")
+
+        # ─── Recent History ──────────────────────────────────────────────
+        with st.expander("📜 Lesson History", expanded=False):
+            all_lessons = dm.get_all_lessons()
+            past = [l for l in all_lessons if l["status"] != "scheduled"]
+            if past:
+                history_data = []
+                for l in past[:30]:
+                    history_data.append({
+                        "Date": l["date"],
+                        "Time": l["time"],
+                        "Student": dm.get_student_name(l["student_id"]),
+                        "Topic": l.get("topic", ""),
+                        "Status": {"conducted": "✅ Done", "cancelled": "❌ Cancelled", "rescheduled": "🔄 Moved"}.get(l["status"], l["status"]),
+                    })
+                st.dataframe(pd.DataFrame(history_data), use_container_width=True, hide_index=True)
+            else:
+                st.caption("No lesson history yet.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 7 — PAYMENTS
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[6]:
+    st.markdown("### 💰 Payment Tracker")
+    st.markdown(
+        "<p style='color:#94a3b8;'>Track paid and conducted lessons for each student. "
+        "Get automatic reminders when a student's balance runs out.</p>",
+        unsafe_allow_html=True,
+    )
+
+    pay_students = dm.get_students()
+
+    if not pay_students:
+        st.info("👈 Add students in the sidebar first.")
+    else:
+        # ─── Record Payment ──────────────────────────────────────────────
+        with st.expander("💳 Record New Payment", expanded=False):
+            col_ps, col_pn = st.columns(2)
+            with col_ps:
+                pay_student = st.selectbox(
+                    "Student",
+                    options=pay_students,
+                    format_func=lambda s: s["name"],
+                    key="pay_student",
+                )
+            with col_pn:
+                pay_count = st.number_input("Number of lessons paid", min_value=1, max_value=100, value=4, key="pay_count")
+            if st.button("💰 Record Payment", key="record_pay_btn", use_container_width=True):
+                dm.record_payment(pay_student["id"], pay_count)
+                st.success(f"Recorded: {pay_student['name']} paid for {pay_count} lessons")
+                st.rerun()
+
+        # ─── Balance Table ───────────────────────────────────────────────
+        st.markdown("#### 📊 Student Balances")
+        summaries = dm.get_all_payment_summaries()
+        if summaries:
+            table_data = []
+            for s in summaries:
+                if s["balance"] > 2:
+                    status = "🟢 OK"
+                elif s["balance"] > 0:
+                    status = "🟡 Скоро закончится"
+                else:
+                    status = "🔴 Пора платить!"
+                table_data.append({
+                    "Student": s["name"],
+                    "Level": s["level"],
+                    "Paid": s["paid"],
+                    "Conducted": s["conducted"],
+                    "Balance": s["balance"],
+                    "Status": status,
+                })
+            st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No payment data yet.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 8 — HOMEWORK CHECK
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[7]:
+    st.markdown("### 📝 AI Homework Checker")
+    st.markdown(
+        "<p style='color:#94a3b8;'>Paste the assignment and the student's answer. "
+        "AI will check it, find errors, grade it, and provide recommendations.</p>",
+        unsafe_allow_html=True,
+    )
+
+    hw_col1, hw_col2 = st.columns(2, gap="large")
+
+    with hw_col1:
+        st.markdown("##### 📋 Assignment")
+        hw_assignment = st.text_area(
+            "Task / Exercise",
+            height=200,
+            placeholder="e.g. Fill in the blanks with the correct form of the verb...\n1. She ___ (go) to school every day.\n2. They ___ (not/like) spicy food.",
+            key="hw_assignment",
+        )
+
+    with hw_col2:
+        st.markdown("##### ✍️ Student's Answer")
+        hw_answer = st.text_area(
+            "Student's response",
+            height=200,
+            placeholder="1. goes\n2. doesn't like",
+            key="hw_answer",
+        )
+
+    # Option to upload handwritten answer as image
+    hw_image = st.file_uploader(
+        "📷 Or upload a photo of handwritten answers",
+        type=["jpg", "jpeg", "png", "webp"],
+        key="hw_image_upload",
+    )
+
+    col_hw_btn, _ = st.columns([1, 4])
+    with col_hw_btn:
+        hw_check_btn = st.button("🔍 Check Homework", key="hw_check_btn")
+
+    if hw_check_btn:
+        if not require_api_key():
+            st.stop()
+
+        has_text_answer = bool(hw_answer.strip())
+        has_image_answer = hw_image is not None
+
+        if not hw_assignment.strip():
+            st.error("Please provide the assignment/task.")
+        elif not has_text_answer and not has_image_answer:
+            st.error("Please provide the student's answer (text or image).")
+        else:
+            with st.spinner("AI is checking the homework..."):
+                hw_prompt = (
+                    f"You are a professional English teacher checking homework.\n"
+                    f"Student Level: {level_code}\n\n"
+                    f"ASSIGNMENT:\n\"\"\"\n{hw_assignment}\n\"\"\"\n\n"
+                )
+                if has_text_answer:
+                    hw_prompt += f"STUDENT'S ANSWER:\n\"\"\"\n{hw_answer}\n\"\"\"\n\n"
+                if has_image_answer:
+                    hw_prompt += "The student's handwritten answer is attached as an image. Please read and check it.\n\n"
+
+                hw_prompt += (
+                    "Please provide a clear markdown response:\n"
+                    "1. **Grade**: X/10\n"
+                    "2. **Correct Answers**: Show the correct version\n"
+                    "3. **Errors Found**: List each mistake with explanation\n"
+                    "4. **Corrected Version**: The student's answer with all fixes applied\n"
+                    "5. **Recommendations**: Tips for improvement\n"
+                    "Keep it friendly and encouraging. Do NOT use JSON."
+                )
+                try:
+                    if has_image_answer:
+                        img_b64 = image_to_base64(hw_image)
+                        raw = call_vision_ai(hw_prompt, img_b64, st.session_state.api_key, provider)
+                    else:
+                        raw = call_text_ai(hw_prompt, st.session_state.api_key, provider)
+
+                    st.markdown("---")
+                    st.markdown(raw)
+
+                    docx_data = create_docx(raw)
+                    st.download_button(
+                        label="⬇️ Download Check Result as Docx",
+                        data=docx_data,
+                        file_name="homework_check.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    )
+                except Exception as e:
+                    st.error(f"Error checking homework: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 9 — MATERIAL GENERATOR
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[8]:
+    st.markdown("### 📚 Teaching Material Generator")
+    st.markdown(
+        "<p style='color:#94a3b8;'>Generate a complete study package on any topic: "
+        "grammar theory, exercises, reading tasks, and listening activities.</p>",
+        unsafe_allow_html=True,
+    )
+
+    mat_topic = st.text_input(
+        "📌 Lesson Topic",
+        placeholder="e.g. Modal Verbs, Present Perfect, Conditionals...",
+        key="mat_topic",
+    )
+
+    st.markdown("##### Select material types to generate:")
+    mat_col1, mat_col2 = st.columns(2)
+    with mat_col1:
+        mat_theory = st.checkbox("📖 Grammar Reference (Theory)", value=True, key="mat_theory")
+        mat_exercises = st.checkbox("✏️ Written Exercises", value=True, key="mat_exercises")
+    with mat_col2:
+        mat_reading = st.checkbox("📰 Reading Task", value=False, key="mat_reading")
+        mat_listening = st.checkbox("🎧 Listening Activity (transcript)", value=False, key="mat_listening")
+
+    col_mat_btn, _ = st.columns([1, 4])
+    with col_mat_btn:
+        mat_gen_btn = st.button("📚 Generate Materials", key="mat_gen_btn")
+
+    if mat_gen_btn:
+        if not require_api_key():
+            st.stop()
+        if not mat_topic.strip():
+            st.error("Please enter a topic.")
+        else:
+            selected = []
+            if mat_theory:
+                selected.append("A clear grammar reference / theory section explaining the rules with examples")
+            if mat_exercises:
+                selected.append("5-8 written practice exercises (fill-in-the-blank, rewrite sentences, error correction) with answer key")
+            if mat_reading:
+                selected.append("A short reading passage (150-250 words) on a related real-world topic, followed by 3-4 comprehension questions with answers")
+            if mat_listening:
+                selected.append("A simulated listening activity: a dialogue transcript (2 speakers, 150-200 words) on a related topic, followed by 3-4 comprehension questions with answers")
+
+            if not selected:
+                st.warning("Select at least one material type.")
+            else:
+                with st.spinner("Generating study materials..."):
+                    mat_prompt = (
+                        f"Create a comprehensive study material package for an English lesson.\n"
+                        f"Topic: \"{mat_topic}\"\n"
+                        f"Target Student Level: {level_code}\n"
+                        f"Context: Online lessons (Zoom, screen sharing)\n\n"
+                        f"Include the following sections:\n"
+                    )
+                    for i, section in enumerate(selected, 1):
+                        mat_prompt += f"{i}. {section}\n"
+
+                    mat_prompt += (
+                        "\nFormat the output as a clean, well-structured markdown document "
+                        "with clear headings and sections. Use examples that are relevant and engaging. "
+                        "Make it ready to share with the student. Do NOT use JSON."
+                    )
+
+                    try:
+                        raw = call_text_ai(mat_prompt, st.session_state.api_key, provider)
+
+                        st.markdown("---")
+                        st.markdown(raw)
+
+                        docx_data = create_docx(raw)
+                        st.download_button(
+                            label="⬇️ Download Materials as Docx",
+                            data=docx_data,
+                            file_name=f"materials_{mat_topic.replace(' ', '_')}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        )
+                    except Exception as e:
+                        st.error(f"Error generating materials: {e}")
