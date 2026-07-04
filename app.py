@@ -73,15 +73,31 @@ st.markdown(
         color: #f1f5f9;
     }
 
-    /* Hide Streamlit Native Header elements but keep sidebar toggle */
-    [data-testid="stHeader"] { background-color: transparent !important; }
+    /* Hide only the right side toolbar, keep header and sidebar toggle intact */
     [data-testid="stToolbar"] { display: none !important; }
     footer { display: none !important; }
     #MainMenu { visibility: hidden; }
     
-    /* Adjust top padding since header is gone */
+    /* Make the sidebar toggle button highly visible when collapsed */
+    [data-testid="collapsedControl"] {
+        display: flex !important;
+        background: rgba(25, 23, 48, 0.45) !important;
+        border: 1px solid rgba(139, 92, 246, 0.4) !important;
+        border-radius: 8px !important;
+        margin: 10px !important;
+        z-index: 999999 !important;
+    }
+    [data-testid="collapsedControl"]:hover {
+        background: rgba(139, 92, 246, 0.3) !important;
+    }
+    [data-testid="collapsedControl"] svg {
+        fill: #c084fc !important;
+        color: #c084fc !important;
+    }
+    
+    /* Adjust top padding */
     .block-container {
-        padding-top: 2rem !important;
+        padding-top: 1rem !important;
         padding-bottom: 2rem !important;
     }
 
