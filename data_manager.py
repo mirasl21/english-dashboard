@@ -202,6 +202,13 @@ def get_pending_homeworks() -> list[dict]:
     res = supabase.table("homework").select("*").eq("status", "sent").execute()
     return res.data
 
+# Alias for backwards compatibility with telegram_bot.py
+get_pending_homework = get_pending_homeworks
+
+def mark_homework_delivered(hw_id: str) -> None:
+    if not supabase: return
+    supabase.table("homework").update({"status": "delivered"}).eq("id", hw_id).execute()
+
 def update_homework(hw_id: str, updates: dict) -> None:
     if not supabase: return
     supabase.table("homework").update(updates).eq("id", hw_id).execute()
