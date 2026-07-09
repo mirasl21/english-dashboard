@@ -13,7 +13,6 @@ with open("dashboard_data.json", "r", encoding="utf-8") as f:
 
 # Migrate students
 for student in data.get("students", []):
-    print(f"Migrating student: {student['name']}")
     supabase.table("students").insert({
         "id": student["id"],
         "name": student["name"],
@@ -25,7 +24,6 @@ for student in data.get("students", []):
 
 # Migrate payments
 for payment in data.get("payments", []):
-    print(f"Migrating payment for student {payment['student_id']}")
     supabase.table("payments").insert({
         "student_id": payment["student_id"],
         "paid_lessons": payment.get("paid_lessons", 0),

@@ -1,0 +1,190 @@
+{
+  "students": [
+    {
+      "id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "name": "Настя",
+      "level": "B2",
+      "contact": "",
+      "created_at": "2026-07-04T19:01:40.231298",
+      "telegram_username": "sylexee"
+    }
+  ],
+  "lessons": [
+    {
+      "id": "90b3b0d7-48ff-40de-9f2a-44f3723c5448",
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "date": "2026-07-05",
+      "time": "15:00",
+      "topic": "фывфывфыв",
+      "status": "rescheduled",
+      "created_at": "2026-07-04T19:27:30.560645"
+    },
+    {
+      "id": "a1083c3e-0426-474c-8d0f-9021155dd77a",
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "date": "2026-07-04",
+      "time": "15:00",
+      "topic": "фывфывфыв",
+      "status": "conducted",
+      "created_at": "2026-07-04T19:38:18.053052"
+    },
+    {
+      "id": "8264138c-4d40-45f4-a3b5-66141908cb1a",
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "date": "2026-07-05",
+      "time": "14:00",
+      "topic": "123",
+      "status": "cancelled",
+      "created_at": "2026-07-04T19:49:46.961215"
+    },
+    {
+      "id": "b49e9757-8a50-4a0e-a71d-f5d7d00e51b1",
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "date": "2026-07-05",
+      "time": "15:00",
+      "topic": "123",
+      "status": "cancelled",
+      "created_at": "2026-07-04T19:52:35.181398"
+    },
+    {
+      "id": "83960beb-7a84-4d5e-90f0-202534e2f8d7",
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "date": "2026-07-05",
+      "time": "15:00",
+      "topic": "123",
+      "status": "conducted",
+      "created_at": "2026-07-04T19:54:44.481216"
+    },
+    {
+      "id": "13d107b6-b0cd-4643-a964-86059fd53a0e",
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "date": "2026-07-05",
+      "time": "15:00",
+      "topic": "123",
+      "status": "conducted",
+      "created_at": "2026-07-04T19:56:05.853563"
+    },
+    {
+      "id": "5c81424a-5194-4aad-a596-5296730acc1e",
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "date": "2026-07-05",
+      "time": "16:00",
+      "topic": "123",
+      "status": "conducted",
+      "created_at": "2026-07-04T19:56:10.909417"
+    },
+    {
+      "id": "df02ae44-b42e-4c17-963c-a6778c6327c8",
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "date": "2026-07-05",
+      "time": "16:00",
+      "topic": "123",
+      "status": "conducted",
+      "created_at": "2026-07-04T19:56:14.688851"
+    },
+    {
+      "id": "d8268567-1e0a-49ce-a3e6-d29761cd28b9",
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "date": "2026-07-05",
+      "time": "16:00",
+      "topic": "123",
+      "status": "conducted",
+      "created_at": "2026-07-04T19:56:18.307866"
+    }
+  ],
+  "payments": [
+    {
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "paid_lessons": 5,
+      "conducted_lessons": 6
+    }
+  ],
+  "homework": [
+    {
+      "id": "fda06ab7-6347-431f-ae35-d70ff40269a0",
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "assignment": "Question 1\nWhich of the following sentences is an example of the third conditional?\n\nA) If it rains tomorrow, I will stay home.\nB) If I had known about the meeting, I would have attended.\nC) If she sees him, she will tell him the news.\nD) If I were you, I would take the job offer.\n\nQuestion 2\nComplete the following third conditional sentence: \"If they ___ the train, they ___ late for the meeting.\"\n\nA) caught, would not have been\nB) had caught, would not have been\nC) catch, will not be\nD) had caught, will not be\n\nQuestion 3\nIdentify the correct third conditional form to complete this sentence: \"If she ___ (study) harder, she ___ (pass) the exam.\"\n\nA) studied, would have passed\nB) had studied, would passed\nC) had studied, would have passed\nD) studies, will pass",
+      "due_date": "2026-07-04",
+      "status": "sent",
+      "student_answer": "",
+      "ai_feedback": "",
+      "grade": "",
+      "created_at": "2026-07-04T19:11:39.897515",
+      "submitted_at": "",
+      "checked_at": "",
+      "tg_delivered": true
+    },
+    {
+      "id": "075bd5de-3057-469b-bcf1-6649ffc01d2c",
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "assignment": "Question 1\nWhich of the following sentences is an example of the third conditional?\n\nA) If it rains tomorrow, I will stay home.\nB) If I had known about the meeting, I would have attended.\nC) If she sees him, she will tell him the news.\nD) If I were you, I would take the job offer.\n\nQuestion 2\nComplete the following third conditional sentence: \"If they ___ the train, they ___ late for the meeting.\"\n\nA) caught, would not have been\nB) had caught, would not have been\nC) catch, will not be\nD) had caught, will not be\n\nQuestion 3\nIdentify the correct third conditional form to complete this sentence: \"If she ___ (study) harder, she ___ (pass) the exam.\"\n\nA) studied, would have passed\nB) had studied, would passed\nC) had studied, would have passed\nD) studies, will pass",
+      "due_date": "2026-07-04",
+      "status": "sent",
+      "student_answer": "",
+      "ai_feedback": "",
+      "grade": "",
+      "created_at": "2026-07-04T19:11:51.769833",
+      "submitted_at": "",
+      "checked_at": "",
+      "tg_delivered": true
+    },
+    {
+      "id": "2604cb1d-3e39-4c74-9a9a-ab579f48adb8",
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "assignment": "Question 1\nWhich of the following sentences is an example of the third conditional?\n\nA) If it rains tomorrow, I will stay home.\nB) If I had known about the meeting, I would have attended.\nC) If she sees him, she will tell him the news.\nD) If I were you, I would take the job offer.\n\nQuestion 2\nComplete the following third conditional sentence: \"If they ___ the train, they ___ late for the meeting.\"\n\nA) caught, would not have been\nB) had caught, would not have been\nC) catch, will not be\nD) had caught, will not be\n\nQuestion 3\nIdentify the correct third conditional form to complete this sentence: \"If she ___ (study) harder, she ___ (pass) the exam.\"\n\nA) studied, would have passed\nB) had studied, would passed\nC) had studied, would have passed\nD) studies, will pass",
+      "due_date": "2026-07-04",
+      "status": "sent",
+      "student_answer": "",
+      "ai_feedback": "",
+      "grade": "",
+      "created_at": "2026-07-04T19:11:52.620018",
+      "submitted_at": "",
+      "checked_at": "",
+      "tg_delivered": true
+    },
+    {
+      "id": "feee0205-9201-4224-b4c8-7ff35e4d9680",
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "assignment": "Question 1\nWhich of the following sentences is an example of the third conditional?\n\nA) If it rains tomorrow, I will stay home.\nB) If I had known about the meeting, I would have attended.\nC) If she sees him, she will tell him the news.\nD) If I were you, I would take the job offer.\n\nQuestion 2\nComplete the following third conditional sentence: \"If they ___ the train, they ___ late for the meeting.\"\n\nA) caught, would not have been\nB) had caught, would not have been\nC) catch, will not be\nD) had caught, will not be\n\nQuestion 3\nIdentify the correct third conditional form to complete this sentence: \"If she ___ (study) harder, she ___ (pass) the exam.\"\n\nA) studied, would have passed\nB) had studied, would passed\nC) had studied, would have passed\nD) studies, will pass",
+      "due_date": "2026-07-04",
+      "status": "checked",
+      "student_answer": "Привет! Можем перенести сегодняшний урок на завтра на 15:00?",
+      "ai_feedback": "1. **Оценка**: 0/10\n\n2. **Правильные ответы**:\n   - Вопрос 1: B) If I had known about the meeting, I would have attended.\n   - Вопрос 2: B) had caught, would not have been\n   - Вопрос 3: C) had studied, would have passed\n\n3. **Ошибки**:\n   - Ответ на вопрос 1 отсутствует. Правильный ответ: B) Это пример третьего условного, так как он описывает ситуацию в прошлом, которая не произошла.\n   - Ответ на вопрос 2 отсутствует. Правильный ответ: B) had caught, would not have been. Это правильная форма третьего условного, так как она описывает гипотетическую ситуацию в прошлом.\n   - Ответ на вопрос 3 отсутствует. Правильный ответ: C) had studied, would have passed. Это правильная форма третьего условного, так как она описывает гипотетическую ситуацию в прошлом.\n\n4. **Исправленная версия**:\n   - Вопрос 1: B) If I had known about the meeting, I would have attended.\n   - Вопрос 2: B) had caught, would not have been\n   - Вопрос 3: C) had studied, would have passed\n\n5. **Рекомендации**:\n   - Попробуйте сосредоточиться на изучении различных типов условных предложений. Это поможет вам лучше понять, как они используются в английском языке.\n   - Практикуйтесь в составлении предложений с использованием третьего условного, чтобы закрепить материал.\n   - Если у вас есть вопросы или что-то непонятно, не стесняйтесь спрашивать. Я всегда готов помочь!",
+      "grade": "0/10",
+      "created_at": "2026-07-04T19:12:14.901687",
+      "submitted_at": "2026-07-04T19:35:16.755165",
+      "checked_at": "2026-07-04T19:35:20.650002",
+      "tg_delivered": true
+    },
+    {
+      "id": "0c1b7c0b-7153-486c-be5f-9bd545c0b560",
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "assignment": "ЖОПА",
+      "due_date": "2026-07-04",
+      "status": "checked",
+      "tg_delivered": true,
+      "student_answer": "1) B\n2) D \n3) A",
+      "ai_feedback": "1. **Оценка**: 0/10\n\n2. **Правильные ответы**: К сожалению, без контекста или дополнительной информации о задании невозможно предоставить правильные ответы.\n\n3. **Ошибки**: \n   - Похоже, что задание не было выполнено должным образом, так как предоставленные ответы (1) B, (2) D, (3) A не соответствуют заданию \"ЖОПА\". Возможно, вы не поняли задание или перепутали его с другим.\n\n4. **Исправленная версия**: Пожалуйста, уточните задание или предоставьте дополнительную информацию о том, что именно требовалось сделать.\n\n5. **Рекомендации**: \n   - Убедитесь, что вы понимаете задание перед тем, как начать его выполнять. Если что-то непонятно, не стесняйтесь задавать вопросы учителю.\n   - Попробуйте еще раз выполнить задание, внимательно прочитав его и следуя инструкциям.\n   - Практикуйтесь в чтении и понимании инструкций на английском языке, чтобы улучшить свои навыки.\n\nНе переживайте, ошибки — это часть процесса обучения. Главное — учиться на них и продолжать улучшаться!",
+      "grade": "0/10",
+      "created_at": "2026-07-04T19:17:13.445744",
+      "submitted_at": "2026-07-04T19:24:08.868531",
+      "checked_at": "2026-07-04T19:24:13.642115"
+    },
+    {
+      "id": "2cd9bb70-aa77-4f8b-a758-3a9d031f5724",
+      "student_id": "fbd8de15-3d63-4e2a-b568-51ba316f0fa6",
+      "assignment": "Question 1\nWhich of the following sentences is an example of the third conditional?\n\nA) If it rains tomorrow, I will stay home.\nB) If I had known about the meeting, I would have attended.\nC) If she sees him, she will tell him the news.\nD) If I were you, I would take the job offer.\n\nQuestion 2\nComplete the following third conditional sentence: \"If they _ the train, they _ late for the meeting.\"\n\nA) caught, would not have been\nB) had caught, would not have been\nC) catch, will not be\nD) had caught, will not be\n\nQuestion 3\nIdentify the correct third conditional form to complete this sentence: \"If she _ (study) harder, she _ (pass) the exam.\"\n\nA) studied, would have passed\nB) had studied, would passed\nC) had studied, would have passed\nD) studies, will pass",
+      "due_date": "2026-07-04",
+      "status": "checked",
+      "tg_delivered": true,
+      "student_answer": "кароч дз не обязательно хуйня идея",
+      "ai_feedback": "1. **Оценка**: 0/10\n\n2. **Правильные ответы**:\n   - Вопрос 1: B) If I had known about the meeting, I would have attended.\n   - Вопрос 2: B) had caught, would not have been\n   - Вопрос 3: C) had studied, would have passed\n\n3. **Ошибки**:\n   - Студент не ответил на вопросы задания, вместо этого оставил комментарий, который не относится к выполнению задачи.\n\n4. **Исправленная версия**:\n   - Вопрос 1: B) If I had known about the meeting, I would have attended.\n   - Вопрос 2: B) had caught, would not have been\n   - Вопрос 3: C) had studied, would have passed\n\n5. **Рекомендации**:\n   - Постарайтесь внимательно прочитать задание и сосредоточиться на его выполнении. Это поможет вам лучше понять материал и улучшить свои знания английского языка.\n   - Практикуйте использование третьего условного наклонения, так как это важная часть грамматики уровня B2. Попробуйте составлять свои собственные предложения, используя этот тип условных предложений.\n   - Если что-то непонятно, не стесняйтесь задавать вопросы учителю или искать дополнительные ресурсы для изучения темы.",
+      "grade": "0/10",
+      "created_at": "2026-07-04T19:24:45.576763",
+      "submitted_at": "2026-07-04T19:24:52.279982",
+      "checked_at": "2026-07-04T19:24:55.907442"
+    }
+  ],
+  "books": [],
+  "audio_files": []
+}

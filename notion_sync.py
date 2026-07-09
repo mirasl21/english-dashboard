@@ -9,7 +9,11 @@ The module pushes lesson records to a Notion database and can pull changes back.
 """
 
 from typing import Optional
+import os
+from dotenv import load_dotenv
 
+load_dotenv()
+TEACHER_TIMEZONE = os.environ.get("TEACHER_TIMEZONE", "+05:00")
 
 def _get_client(token: str):
     """Lazy-import and return a Notion client."""
@@ -27,14 +31,14 @@ def _get_notion_date_dict(date_str: str, time_str: Optional[str]) -> dict:
         end_hours = (hours + 1) % 24
         end_time_str = f"{end_hours:02d}:{minutes:02d}"
         
-        # We append +05:00 so Notion doesn't treat it as UTC and shift it by 5 hours.
+        # We append TEACHER_TIMEZONE so Notion doesn't treat it as UTC.
         return {
-            "start": f"{date_str}T{time_str}:00+05:00",
-            "end": f"{date_str}T{end_time_str}:00+05:00"
+            "start": f"{date_str}T{time_str}:00{TEACHER_TIMEZONE}",
+            "end": f"{date_str}T{end_time_str}:00{TEACHER_TIMEZONE}"
         }
     except Exception:
         # Fallback if time parsing fails
-        return {"start": f"{date_str}T{time_str}:00+05:00"}
+        return {"start": f"{date_str}T{time_str}:00{TEACHER_TIMEZONE}"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -64,7 +68,6 @@ def push_lesson_to_notion(
                 "Date": {"date": date_obj},
                 "Time": {"rich_text": [{"text": {"content": lesson_time}}]},
                 "Topic": {"rich_text": [{"text": {"content": topic or "—"}}]},
-                "Status": {"select": {"name": status}},
             },
         )
         return new_page["id"]
@@ -112,9 +115,7 @@ def update_lesson_in_notion(
     """Update an existing Notion page (e.g. after rescheduling)."""
     try:
         client = _get_client(token)
-        props: dict = {
-            "Status": {"select": {"name": status}},
-        }
+        props: dict = {}
         if new_date:
             props["Date"] = {"date": _get_notion_date_dict(new_date, new_time)}
         if new_time:
@@ -125,6 +126,33 @@ def update_lesson_in_notion(
         print(f"Error updating lesson in Notion: {e}")
         return False
 
+
+def update_lesson_status_in_notion(token: str, database_id: str, student_name: str, lesson_date: str, new_status: str) -> None:
+    page_id = find_lesson_in_notion(token, database_id, student_name, lesson_date)
+    if not page_id:
+        return
+        
+    client = _get_client(token)
+    try:
+        client.pages.update(
+            page_id=page_id,
+            properties={
+                "Status": {"status": {"name": new_status}}
+            }
+        )
+    except Exception as e:
+        print(f"Error updating lesson status in Notion: {e}")
+
+def delete_lesson_in_notion(token: str, database_id: str, student_name: str, lesson_date: str) -> None:
+    page_id = find_lesson_in_notion(token, database_id, student_name, lesson_date)
+    if not page_id:
+        return
+        
+    client = _get_client(token)
+    try:
+        client.pages.update(page_id=page_id, archived=True)
+    except Exception as e:
+        print(f"Error deleting lesson in Notion: {e}")
 
 def test_notion_connection(token: str, database_id: str) -> tuple[bool, str]:
     """Verify that the token + database ID are valid.

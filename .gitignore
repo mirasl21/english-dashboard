@@ -5,4 +5,7 @@ __pycache__/
 telegram_config.json
 teacher_session.session
 *.bak
-*.sql
+materials.json
+audio_files/
+books/
+sample_images/

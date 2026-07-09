@@ -1,461 +1,349 @@
 """
-telegram_bot.py — Telethon Userbot for English Teacher Dashboard.
+telegram_bot.py — Private Telegram Assistant for the English Teacher.
 
-Monitors incoming Telegram messages from students to:
-1. Detect schedule changes (reschedule/cancel) via AI parsing
-2. Receive homework answers and auto-check them via AI
-
-Requires:
-  - Telegram API ID & Hash (from https://my.telegram.org)
-  - Phone number for one-time authorization
-  - AI API key (OpenAI or Gemini)
+Uses python-telegram-bot.
+Monitors messages from the teacher to:
+1. Parse schedule changes and update the database + Notion.
+2. Check homework answers sent by the teacher using AI.
 
 Usage:
-  python telegram_bot.py                    # Start the userbot
-  python telegram_bot.py --test             # Test connection
+  python telegram_bot.py
 """
 
-import asyncio
-import json
 import os
 import re
-import sys
-import signal
-from datetime import date, datetime
-from pathlib import Path
+import json
+import asyncio
+from datetime import date
+from dotenv import load_dotenv
 
-# ─── Configuration file ─────────────────────────────────────────────────────
-CONFIG_FILE = Path(__file__).parent / "telegram_config.json"
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-DEFAULT_CONFIG = {
-    "api_id": "",
-    "api_hash": "",
-    "phone": "",
-    "ai_api_key": "",
-    "ai_provider": "OpenAI (GPT-4o)",
-    "notion_token": "",
-    "notion_db_id": "",
-    "monitored_usernames": [],  # Telegram usernames of students to watch
-}
+import data_manager as dm
+import notion_sync
 
+load_dotenv()
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TEACHER_TELEGRAM_ID = os.environ.get("TEACHER_TELEGRAM_ID")
+DEVELOPER_TELEGRAM_ID = os.environ.get("DEVELOPER_TELEGRAM_ID")
+ALLOWED_IDS = [str(TEACHER_TELEGRAM_ID), str(DEVELOPER_TELEGRAM_ID)]
+AI_API_KEY = os.environ.get("OPENAI_API_KEY") # Or Gemini if configured
 
-def load_config() -> dict:
-    """Load bot configuration from JSON file."""
-    if CONFIG_FILE.exists():
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-        for k, v in DEFAULT_CONFIG.items():
-            cfg.setdefault(k, v)
-        return cfg
-    return dict(DEFAULT_CONFIG)
+# ─── AI Helpers ──────────────────────────────────────────────────────────────
 
-
-def save_config(cfg: dict) -> None:
-    """Save bot configuration to JSON file."""
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
-
-
-# ─── AI Helpers (standalone, no Streamlit dependency) ────────────────────────
-
-def call_ai(prompt: str, api_key: str, provider: str) -> str:
-    """Call AI model for text processing."""
-    if "openai" in provider.lower() or "gpt" in provider.lower():
+async def call_ai(prompt: str) -> str:
+    """Call AI model for text processing asynchronously."""
+    # Assuming Gemini or OpenAI. We'll implement a simple OpenAI call here, 
+    # but we will use asyncio.to_thread to avoid blocking.
+    def _call():
         from openai import OpenAI
-        client = OpenAI(api_key=api_key)
+        client = OpenAI(api_key=AI_API_KEY)
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
         )
         return response.choices[0].message.content.strip()
-    else:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-pro")
-        response = model.generate_content(prompt)
-        return response.text.strip()
+    return await asyncio.to_thread(_call)
 
-
-def call_vision_ai_standalone(prompt: str, image_bytes: bytes, api_key: str, provider: str) -> str:
-    """Call AI model for image + text processing."""
-    import base64
-    img_b64 = base64.b64encode(image_bytes).decode("utf-8")
-
-    if "openai" in provider.lower() or "gpt" in provider.lower():
+async def call_vision_ai(prompt: str, images_bytes: list[bytes]) -> str:
+    """Call AI model for multiple images + text processing asynchronously."""
+    def _call():
+        import base64
         from openai import OpenAI
-        client = OpenAI(api_key=api_key)
+        client = OpenAI(api_key=AI_API_KEY)
+        
+        content_array = []
+        for img_bytes in images_bytes:
+            img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+            content_array.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}", "detail": "high"}})
+        content_array.append({"type": "text", "text": prompt})
+        
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{
                 "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}", "detail": "high"}},
-                    {"type": "text", "text": prompt},
-                ],
+                "content": content_array,
             }],
             temperature=0.6,
             max_tokens=4096,
         )
         return response.choices[0].message.content.strip()
-    else:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-pro")
-        image_part = {"mime_type": "image/jpeg", "data": image_bytes}
-        response = model.generate_content([prompt, image_part])
-        return response.text.strip()
+    return await asyncio.to_thread(_call)
 
+# ─── Handlers ────────────────────────────────────────────────────────────────
 
-# ─── Schedule parsing ────────────────────────────────────────────────────────
+pending_homework = {}
 
-def parse_schedule_message(text: str, student_name: str, api_key: str,
-                           provider: str, all_student_names: list[str]) -> dict | None:
-    """Use AI to parse a student message for schedule changes.
-    Returns parsed dict or None if the message is not schedule-related."""
-    prompt = (
-        f"You are a scheduling assistant for an English teacher.\n"
-        f"Analyze this message from student '{student_name}' and determine "
-        f"if it contains a request to change, cancel, or add a lesson.\n\n"
-        f"Known students: {', '.join(all_student_names)}\n"
-        f"Today's date: {date.today().isoformat()}\n\n"
-        f"Message: \"{text}\"\n\n"
-        f"If this message IS about scheduling, return a JSON object:\n"
-        f'{{"is_schedule": true, "student_name": "...", "action": "reschedule|cancel|add", '
-        f'"old_date": "YYYY-MM-DD", "new_date": "YYYY-MM-DD", "new_time": "HH:MM", "topic": "..."}}\n\n'
-        f"If this message is NOT about scheduling (e.g. just chatting, asking a question), return:\n"
-        f'{{"is_schedule": false}}\n\n'
-        f"Return ONLY the JSON, no extra text."
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a message when the command /start is issued."""
+    if str(update.effective_user.id) not in ALLOWED_IDS:
+        return
+
+    await update.message.reply_text(
+        "👋 Привет! Я твой личный ассистент.\n"
+        "Ты можешь отправлять мне изменения в расписании (например, «Настя перенесла урок на пятницу 15:00»)\n"
+        "Или отправлять фото домашки учеников для быстрой проверки."
     )
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process incoming messages from the teacher."""
+    if str(update.effective_user.id) not in ALLOWED_IDS:
+        return
+
+    if not AI_API_KEY:
+        await update.message.reply_text("⚠️ Ошибка: API ключ AI не настроен.")
+        return
+
+    message_text = update.message.text or update.message.caption or ""
+
+    if update.message.photo:
+        photo_file = await update.message.photo[-1].get_file(read_timeout=60, connect_timeout=60)
+        image_bytes = await photo_file.download_as_bytearray()
+        
+        chat_id = update.message.chat_id
+        if chat_id not in pending_homework:
+            pending_homework[chat_id] = image_bytes
+            await update.message.reply_text("📸 Ключи (правильные ответы) получены! Теперь отправь фото с ответами ученика.")
+            return
+            
+        student_bytes = image_bytes
+        key_bytes = pending_homework.pop(chat_id)
+        
+        # We process homework directly since two photos were sent
+        await handle_homework_photos(update, message_text, key_bytes, student_bytes, "B1")
+        return
+
+    # If it's a text message without photo, assume it's a schedule change or simple question
+    await update.message.reply_text("⏳ Обрабатываю текст...")
+
+    # 1. Fetch students via to_thread
+    students = await asyncio.to_thread(dm.get_students)
+    student_info = [f"{s['name']} (TZ: {s.get('contact') or 'Asia/Almaty'})" for s in students]
+
+    # 2. Check intent using AI
+    prompt = (
+        f"You are a helpful assistant for an English teacher.\n"
+        f"The teacher sent this message: \"{message_text}\"\n"
+        f"Does this message look like a SCHEDULE CHANGE (reschedule, cancel, add lesson) or HOMEWORK CHECK?\n"
+        f"If the message contains words like 'проверь', 'домашка', or consists of a block of English text with mistakes, it is a homework check.\n"
+        f"If it mentions a student name and dates/times, it is a schedule change.\n"
+        f"Known students: {', '.join(student_info)}\n"
+        f"Today's date: {date.today().isoformat()}\n"
+        f"IMPORTANT: For schedule changes, the teacher is stating times in the STUDENT'S timezone. You must convert these times from the student's timezone to Kazakhstan Time (Asia/Almaty, UTC+05:00) before returning the JSON.\n\n"
+        f"Return JSON:\n"
+        f'{{"type": "schedule", "student_name": "...", "action": "reschedule|cancel|add", "old_date": "YYYY-MM-DD", "new_date": "YYYY-MM-DD", "new_time": "HH:MM", "added_lessons": [{{"date": "YYYY-MM-DD", "time": "HH:MM"}}], "topic": "..."}}\n'
+        f"(Use 'added_lessons' array ONLY when action is 'add'. It can contain one or multiple lessons).\n"
+        f"OR\n"
+        f'{{"type": "homework", "student_name": "...", "level": "B2"}}\n'
+        f"Return ONLY JSON."
+    )
+    
     try:
-        raw = call_ai(prompt, api_key, provider)
-        json_match = re.search(r'\{.*\}', raw, re.DOTALL)
-        if json_match:
-            parsed = json.loads(json_match.group())
-            if parsed.get("is_schedule"):
-                return parsed
+        raw_intent = await call_ai(prompt)
+        json_match = re.search(r'\{.*\}', raw_intent, re.DOTALL)
+        if not json_match:
+            await update.message.reply_text("🤔 Не поняла, это расписание или домашка?")
+            return
+            
+        intent = json.loads(json_match.group())
+        msg_type = intent.get("type")
+        
+        if msg_type == "schedule":
+            await handle_schedule(update, intent, students)
+        elif msg_type == "homework":
+            await handle_homework_text(update, message_text, intent.get("level", "B1"))
+        else:
+            await update.message.reply_text("🤔 Не распознала команду.")
+            
     except Exception as e:
-        print(f"[Bot] Error parsing schedule message: {e}")
-    return None
+        print(f"Error parsing message: {e}")
+        await update.message.reply_text(f"⚠️ Ошибка обработки: {e}")
 
+async def handle_schedule(update: Update, parsed: dict, students: list):
+    """Handle schedule updates."""
+    action = parsed.get("action", "")
+    student_name = parsed.get("student_name", "")
+    student = next((s for s in students if s["name"].lower() == student_name.lower()), None)
+    
+    if not student:
+        await update.message.reply_text(f"⚠️ Не нашла ученика с именем {student_name}.")
+        return
 
-# ─── Homework checking ──────────────────────────────────────────────────────
+    if action == "reschedule":
+        old_d = parsed.get("old_date", "")
+        new_d = parsed.get("new_date", "")
+        new_t = parsed.get("new_time", "14:00")
 
-def check_homework_with_ai(assignment: str, student_answer: str,
-                            student_level: str, api_key: str,
-                            provider: str, image_bytes: bytes = None) -> str:
-    """Check homework using AI and return feedback text."""
+        lessons = await asyncio.to_thread(dm.get_lessons_for_student, student["id"])
+        target = next((l for l in lessons if l["date"] == old_d and l["status"] == "scheduled"), None)
+        
+        if target:
+            await asyncio.to_thread(dm.update_lesson_status, target["id"], "rescheduled")
+            await asyncio.to_thread(dm.add_lesson, student["id"], new_d, new_t, target.get("topic", ""))
+            
+            notion_token = os.environ.get("NOTION_TOKEN")
+            notion_db = os.environ.get("NOTION_DB_ID")
+            if notion_token and notion_db:
+                # Basic push logic for Notion (simplified)
+                await asyncio.to_thread(
+                    notion_sync.push_lesson_to_notion, 
+                    notion_token, notion_db, student_name, new_d, new_t, target.get("topic", "")
+                )
+            await update.message.reply_text(f"✅ Урок перенесён: {old_d} → {new_d} в {new_t}")
+        else:
+            await update.message.reply_text(f"⚠️ Не нашла урок на {old_d}.")
+            
+    elif action == "cancel":
+        old_d = parsed.get("old_date", "")
+        lessons = await asyncio.to_thread(dm.get_lessons_for_student, student["id"])
+        target = next((l for l in lessons if l["date"] == old_d and l["status"] == "scheduled"), None)
+        
+        if target:
+            await asyncio.to_thread(dm.update_lesson_status, target["id"], "cancelled")
+            await update.message.reply_text(f"✅ Урок на {old_d} отменён.")
+        else:
+            await update.message.reply_text(f"⚠️ Не нашла урок на {old_d}.")
+
+    elif action == "add":
+        topic = parsed.get("topic", "")
+        added_lessons = parsed.get("added_lessons", [])
+        
+        # Fallback to single lesson if AI didn't use added_lessons
+        if not added_lessons:
+            new_d = parsed.get("new_date", "")
+            new_t = parsed.get("new_time", "14:00")
+            if new_d:
+                added_lessons.append({"date": new_d, "time": new_t})
+                
+        if not added_lessons:
+            await update.message.reply_text("⚠️ Не удалось распознать даты для добавления.")
+            return
+
+        notion_token = os.environ.get("NOTION_TOKEN")
+        notion_db = os.environ.get("NOTION_DB_ID")
+        
+        for lesson in added_lessons:
+            d = lesson.get("date", "")
+            t = lesson.get("time", "14:00")
+            if not d: continue
+            
+            await asyncio.to_thread(dm.add_lesson, student["id"], d, t, topic)
+            if notion_token and notion_db:
+                await asyncio.to_thread(
+                    notion_sync.push_lesson_to_notion, 
+                    notion_token, notion_db, student_name, d, t, topic
+                )
+                
+        if len(added_lessons) == 1:
+            l = added_lessons[0]
+            await update.message.reply_text(f"✅ Урок добавлен: {l.get('date')} в {l.get('time')}")
+        else:
+            await update.message.reply_text(f"✅ Добавлено уроков: {len(added_lessons)} шт.")
+
+async def handle_homework_text(update: Update, text: str, level: str):
+    """Handle homework checking for text only."""
+    await update.message.reply_text("🔍 Проверяю домашку (текст)...")
+    
     prompt = (
-        f"You are a professional English teacher checking homework.\n"
-        f"Student Level: {student_level}\n\n"
-        f"ASSIGNMENT:\n\"\"\"\n{assignment}\n\"\"\"\n\n"
+        f"You are a strict and detail-oriented English teacher checking a student's homework.\n"
+        f"Level: {level}\n\n"
+        f"Student's message text: \"{text}\"\n\n"
+        f"IMPORTANT INSTRUCTIONS:\n"
+        f"1. Evaluate the text for grammatical or vocabulary mistakes.\n"
+        f"2. Point out EVERY mistake. Do NOT be lenient. Explain WHY each mistake is wrong in Russian.\n"
+        f"3. If there are no mistakes at all, state that the text is perfect.\n\n"
+        f"Please provide a markdown response in the following format:\n"
+        f"**Анализ ответов**:\n"
+        f"(briefly list what you read and checked to prove you analyzed it properly)\n\n"
+        f"1. **Оценка**: X/10\n"
+        f"2. **Ошибки**:\n"
+        f"   - [Mistake] -> [Correction] (Explanation in Russian)\n"
+        f"   (If no mistakes, write: 'Ошибок нет, отличная работа!')\n"
+        f"3. **Исправленный текст**: (The full text with all corrections applied)\n\n"
+        f"Answer entirely in Russian (except for the English words being corrected)."
     )
-    if student_answer:
-        prompt += f"STUDENT'S ANSWER:\n\"\"\"\n{student_answer}\n\"\"\"\n\n"
-    if image_bytes:
-        prompt += "The student's answer is also attached as an image.\n\n"
 
-    prompt += (
-        "Provide a clear response in Russian:\n"
-        "1. **Оценка**: X/10\n"
-        "2. **Правильные ответы**: показать правильную версию\n"
-        "3. **Ошибки**: перечислить каждую ошибку с объяснением\n"
-        "4. **Исправленная версия**: ответ ученика со всеми исправлениями\n"
-        "5. **Рекомендации**: советы для улучшения\n"
-        "Keep it friendly and encouraging."
-    )
-
-    if image_bytes:
-        return call_vision_ai_standalone(prompt, image_bytes, api_key, provider)
-    return call_ai(prompt, api_key, provider)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# TELETHON USERBOT
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def run_userbot():
-    """Start the Telethon userbot to monitor student messages."""
     try:
-        from telethon import TelegramClient, events
-    except ImportError:
-        print("[Bot] ERROR: Telethon is not installed. Run: pip install telethon")
-        return
+        from telegram_bot import call_ai
+        ai_response = await call_ai(prompt)
+        await update.message.reply_text(ai_response, parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при обращении к AI: {e}")
 
-    import data_manager as dm
-    import notion_sync
-
-    config = load_config()
-
-    if not config["api_id"] or not config["api_hash"]:
-        print("[Bot] ERROR: api_id and api_hash are required.")
-        print("[Bot] Get them at https://my.telegram.org")
-        print("[Bot] Then configure via the Dashboard sidebar or edit telegram_config.json")
-        return
-
-    session_file = str(Path(__file__).parent / "teacher_session")
-    client = TelegramClient(session_file, int(config["api_id"]), config["api_hash"])
-
-    # Track pending homework per user (telegram_id -> hw_id)
-    pending_hw_answers = {}
-
-    @client.on(events.NewMessage(incoming=True))
-    async def handle_message(event):
-        """Process incoming messages from monitored students."""
-        if not event.is_private:
-            return
-
-        sender = await event.get_sender()
-        if not sender or not sender.username:
-            return
-
-        username = sender.username.lower()
-        # Dynamically fetch monitored usernames from the database
-        monitored = [
-            s.get("telegram_username", "").lower().lstrip("@")
-            for s in dm.get_students()
-            if s.get("telegram_username")
-        ]
-
-        if username not in monitored:
-            return
-
-        # Find the student in our database
-        student = dm.get_student_by_telegram(username)
-        if not student:
-            print(f"[Bot] Message from @{username} — not linked to any student")
-            return
-
-        message_text = event.text or ""
-        student_name = student["name"]
-        api_key = config.get("ai_api_key", "")
-        provider = config.get("ai_provider", "OpenAI (GPT-4o)")
-
-        if not api_key:
-            print(f"[Bot] No AI API key configured — cannot process messages")
-            return
-
-        # ─── 1. Check intent using AI for schedule changes ───────────────────
-        all_students = dm.get_students()
-        all_names = [s["name"] for s in all_students]
-
-        parsed = parse_schedule_message(
-            message_text, student_name, api_key, provider, all_names
-        )
-
-        if parsed:
-            action = parsed.get("action", "")
-            if action in ["reschedule", "cancel", "add"]:
-                print(f"[Bot] Schedule change detected from {student_name}: {action}")
-                try:
-                    if action == "reschedule":
-                        old_d = parsed.get("old_date", "")
-                        new_d = parsed.get("new_date", "")
-                        new_t = parsed.get("new_time", "14:00")
-
-                        lessons = dm.get_lessons_for_student(student["id"])
-                        target = next(
-                            (l for l in lessons if l["date"] == old_d and l["status"] == "scheduled"),
-                            None
-                        )
-                        if target:
-                            dm.update_lesson_status(target["id"], "rescheduled")
-                            dm.add_lesson(student["id"], new_d, new_t, target.get("topic", ""))
-                            if config.get("notion_token") and config.get("notion_db_id"):
-                                # Try to find the old lesson in Notion
-                                page_id = notion_sync.find_lesson_in_notion(
-                                    config["notion_token"], config["notion_db_id"],
-                                    student_name, old_d
-                                )
-                                if page_id:
-                                    # Update existing card to the new date and time
-                                    notion_sync.update_lesson_in_notion(
-                                        config["notion_token"], page_id, "Scheduled", new_d, new_t
-                                    )
-                                else:
-                                    # Fallback: push a new lesson for the new date
-                                    notion_sync.push_lesson_to_notion(
-                                        config["notion_token"], config["notion_db_id"],
-                                        student_name, new_d, new_t,
-                                        target.get("topic", ""),
-                                        status="Scheduled",
-                                    )
-                            await event.reply(
-                                f"✅ Урок перенесён: {old_d} → {new_d} в {new_t}\n"
-                                f"Расписание обновлено!"
-                            )
-                        else:
-                            await event.reply(
-                                f"⚠️ Не нашла урок на {old_d}. Проверь расписание или уточни дату."
-                            )
-
-                    elif action == "cancel":
-                        old_d = parsed.get("old_date", "")
-                        lessons = dm.get_lessons_for_student(student["id"])
-                        target = next(
-                            (l for l in lessons if l["date"] == old_d and l["status"] == "scheduled"),
-                            None
-                        )
-                        if target:
-                            dm.update_lesson_status(target["id"], "cancelled")
-                            await event.reply(f"✅ Урок на {old_d} отменён.")
-                        else:
-                            await event.reply(f"⚠️ Не нашла урок на {old_d}.")
-
-                    elif action == "add":
-                        new_d = parsed.get("new_date", "")
-                        new_t = parsed.get("new_time", "14:00")
-                        topic = parsed.get("topic", "")
-                        dm.add_lesson(student["id"], new_d, new_t, topic)
-                        if config.get("notion_token") and config.get("notion_db_id"):
-                            notion_sync.push_lesson_to_notion(
-                                config["notion_token"], config["notion_db_id"],
-                                student_name, new_d, new_t, topic,
-                            )
-                        await event.reply(
-                            f"✅ Урок добавлен: {new_d} в {new_t}\n"
-                            f"{'Тема: ' + topic if topic else ''}"
-                        )
-                except Exception as e:
-                    print(f"[Bot] Error processing schedule change: {e}")
-                    await event.reply("⚠️ Произошла ошибка при обновлении расписания.")
-                return
-
-        # ─── 2. If not a schedule change, check if it's a homework answer ─────
-        hw_id = pending_hw_answers.get(sender.id)
-        if hw_id:
-            hw = dm.get_homework_by_id(hw_id)
-            if hw and hw["status"] == "sent":
-                print(f"[Bot] Homework answer from {student_name}: {message_text[:80]}...")
-
-                # Get image if attached
-                image_bytes = None
-                if event.photo:
-                    image_bytes = await event.download_media(bytes)
-
-                answer_text = message_text if message_text else "(фото-ответ)"
-                dm.submit_homework(hw_id, answer_text)
-
-                # AI check
-                try:
-                    feedback = check_homework_with_ai(
-                        hw["assignment"], answer_text,
-                        student.get("level", "B1"),
-                        api_key, provider, image_bytes,
-                    )
-                    # Extract grade from feedback
-                    grade_match = re.search(r'(\d+)\s*/\s*10', feedback)
-                    grade = grade_match.group(0) if grade_match else ""
-
-                    dm.save_homework_check(hw_id, feedback, grade)
-
-                    await event.reply(
-                        f"✅ Домашка проверена!\n\n{feedback}"
-                    )
-                    print(f"[Bot] Homework checked for {student_name}: {grade}")
-                except Exception as e:
-                    await event.reply("⚠️ Не удалось проверить домашку автоматически. Учитель проверит вручную.")
-                    print(f"[Bot] Error checking homework: {e}")
-
-                del pending_hw_answers[sender.id]
-                return
-
-        print(f"[Bot] Non-schedule message from {student_name}: {message_text[:60]}...")
-
-    # ─── Function to send homework to a student ─────────────────────────
-    async def send_homework_to_student(telegram_username: str, hw_id: str,
-                                        assignment_text: str):
-        """Send homework assignment to a student via Telegram."""
-        try:
-            entity = await client.get_entity(telegram_username)
-            await client.send_message(
-                entity,
-                f"📝 **Домашнее задание:**\n\n{assignment_text}\n\n"
-                f"Отправь мне ответ текстом или фото, и я проверю! 📚"
-            )
-            pending_hw_answers[entity.id] = hw_id
-            print(f"[Bot] Homework sent to @{telegram_username}")
-            return True
-        except Exception as e:
-            print(f"[Bot] Error sending homework to @{telegram_username}: {e}")
-            return False
-
-    # ─── Background Polling for New Homework ────────────────────────────
-    async def poll_for_homework():
-        """Poll data_manager for newly created homework to send."""
-        # 1. Restore pending homework associations from previous runs
-        try:
-            for hw in dm.get_pending_homework():
-                if hw.get("tg_delivered"):
-                    student = dm.get_student_by_id(hw["student_id"])
-                    if student and student.get("telegram_username"):
-                        try:
-                            entity = await client.get_entity(student["telegram_username"])
-                            pending_hw_answers[entity.id] = hw["id"]
-                        except Exception:
-                            pass
-        except Exception as e:
-            print(f"[Bot] Error restoring pending homework: {e}")
-
-        # 2. Poll for new homework
-        while True:
-            try:
-                for hw in dm.get_pending_homework():
-                    if not hw.get("tg_delivered"):
-                        student = dm.get_student_by_id(hw["student_id"])
-                        if student and student.get("telegram_username"):
-                            print(f"[Bot] Found new homework for @{student['telegram_username']}")
-                            success = await send_homework_to_student(
-                                student["telegram_username"], hw["id"], hw["assignment"]
-                            )
-                            if success:
-                                dm.mark_homework_delivered(hw["id"])
-            except Exception as e:
-                print(f"[Bot] Polling error: {e}")
-            await asyncio.sleep(5)
-
-    print("[Bot] ═══════════════════════════════════════════")
-    print("[Bot]   English Teacher Telegram Userbot")
-    print("[Bot] ═══════════════════════════════════════════")
-    print(f"[Bot] Monitoring: {config.get('monitored_usernames', [])}")
-    print(f"[Bot] AI Provider: {config.get('ai_provider', 'N/A')}")
-    print("[Bot] Waiting for messages...\n")
-
-    await client.start(phone=config.get("phone", ""))
+async def handle_homework_photos(update: Update, text: str, key_bytes: bytes, student_bytes: bytes, level: str):
+    """Handle homework checking with two photos (key + student)."""
+    await update.message.reply_text("🔍 Сравниваю ответы ученика с ключами...")
     
-    # Start the polling task
-    client.loop.create_task(poll_for_homework())
-    
-    await client.run_until_disconnected()
+    prompt = (
+        f"You are a strict and detail-oriented English teacher checking a student's homework.\n"
+        f"Level: {level}\n\n"
+        f"Student's message text (optional): \"{text}\"\n\n"
+        f"You are given TWO images.\n"
+        f"1st image: The Answer Key (правильные ответы).\n"
+        f"2nd image: The Student's Work (ответы ученика).\n\n"
+        f"IMPORTANT INSTRUCTIONS:\n"
+        f"1. Compare the Student's Work strictly against the Answer Key.\n"
+        f"2. Point out every mistake the student made compared to the Answer Key.\n"
+        f"3. Explain WHY each mistake is wrong in Russian.\n"
+        f"4. If there are no mistakes at all, state that the text is perfect.\n\n"
+        f"Please provide a markdown response in the following format:\n"
+        f"**Анализ ответов**:\n"
+        f"(briefly list what you checked)\n\n"
+        f"1. **Оценка**: X/10\n"
+        f"2. **Ошибки**:\n"
+        f"   - [Mistake] -> [Correction] (Explanation in Russian)\n"
+        f"   (If no mistakes, write: 'Ошибок нет, отличная работа!')\n"
+        f"Answer entirely in Russian (except for the English words being corrected)."
+    )
 
+    try:
+        ai_response = await call_vision_ai(prompt, [key_bytes, student_bytes])
+        await update.message.reply_text(ai_response, parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при обращении к AI: {e}")
 
-# ═════════════════════════════════════════════════════════════════════════════
-# CLI ENTRY POINT
-# ═════════════════════════════════════════════════════════════════════════════
+async def auto_complete_past_lessons():
+    while True:
+        try:
+            notion_token = os.environ.get("NOTION_TOKEN")
+            notion_db = os.environ.get("NOTION_DB_ID")
+            if notion_token and notion_db:
+                import notion_sync
+                from data_manager import get_all_lessons, mark_lesson_conducted, get_student_name
+                from datetime import datetime, timedelta
+                
+                now = datetime.now()
+                lessons = await asyncio.to_thread(get_all_lessons)
+                
+                for l in lessons:
+                    if l['status'] != 'scheduled': continue
+                    dt_str = f"{l.get('date')} {l.get('time')}"
+                    try:
+                        lesson_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+                        if now > lesson_dt + timedelta(hours=1):
+                            await asyncio.to_thread(mark_lesson_conducted, l['id'])
+                            student_name = await asyncio.to_thread(get_student_name, l['student_id'])
+                            await asyncio.to_thread(notion_sync.update_lesson_status_in_notion, notion_token, notion_db, student_name, l['date'], "Done")
+                            print(f"Auto-completed lesson for {student_name} on {l['date']}")
+                    except Exception as e:
+                        print(f"Error auto-completing lesson {l.get('id')}: {e}")
+        except Exception as e:
+            print(f"Error in auto_complete loop: {e}")
+            
+        await asyncio.sleep(1800)
 
-def test_connection():
-    """Test the Telegram connection."""
-    from telethon import TelegramClient
-    config = load_config()
-
-    if not config["api_id"] or not config["api_hash"]:
-        print("[Test] ERROR: Configure api_id and api_hash first!")
-        return False
-
-    async def _test():
-        session_file = str(Path(__file__).parent / "teacher_session")
-        client = TelegramClient(session_file, int(config["api_id"]), config["api_hash"])
-        await client.start(phone=config.get("phone", ""))
-        me = await client.get_me()
-        print(f"[Test] ✅ Connected as: {me.first_name} (@{me.username})")
-        await client.disconnect()
-        return True
-
-    return asyncio.run(_test())
-
+async def post_init(application: Application):
+    asyncio.create_task(auto_complete_past_lessons())
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--test":
-        test_connection()
+    if not TELEGRAM_BOT_TOKEN or not ALLOWED_IDS:
+        print("WARNING: TELEGRAM_BOT_TOKEN or ALLOWED_IDS missing. Bot will not start.")
     else:
-        asyncio.run(run_userbot())
+        app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).read_timeout(30).write_timeout(30).connect_timeout(30).post_init(post_init).build()
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
+        
+        print("Bot started...")
+        app.run_polling()

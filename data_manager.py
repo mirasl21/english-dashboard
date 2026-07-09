@@ -1,3 +1,4 @@
+import streamlit as st
 """
 data_manager.py — Persistent data storage for English Teacher Dashboard.
 
@@ -5,6 +6,8 @@ Uses Supabase (PostgreSQL) for cloud sync.
 """
 
 import os
+import json
+import uuid
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
@@ -15,17 +18,25 @@ load_dotenv()
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-BOOKS_DIR = Path(__file__).parent / "books"
-AUDIO_DIR = Path(__file__).parent / "audio_files"
-BOOKS_DIR.mkdir(exist_ok=True)
-AUDIO_DIR.mkdir(exist_ok=True)
-
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("WARNING: SUPABASE_URL or SUPABASE_KEY is missing from .env!")
 
-supabase: Optional[Client] = None
-if SUPABASE_URL and SUPABASE_KEY:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+class SafeSupabase:
+    @property
+    def _client(self):
+        from supabase import ClientOptions
+        # Disable HTTP2 to prevent Windows socket issues, and set timeout
+        opts = ClientOptions()
+        return create_client(SUPABASE_URL, SUPABASE_KEY, options=opts)
+
+    def table(self, *args, **kwargs):
+        return self._client.table(*args, **kwargs)
+
+    @property
+    def storage(self):
+        return self._client.storage
+
+supabase: Optional[SafeSupabase] = SafeSupabase() if (SUPABASE_URL and SUPABASE_KEY) else None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -33,6 +44,7 @@ if SUPABASE_URL and SUPABASE_KEY:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def add_student(name: str, level: str = "B1", contact: str = "") -> dict:
+    st.cache_data.clear()
     if not supabase: return {}
     res = supabase.table("students").insert({
         "name": name.strip(),
@@ -40,7 +52,7 @@ def add_student(name: str, level: str = "B1", contact: str = "") -> dict:
         "contact": contact.strip(),
     }).execute()
     student = res.data[0]
-    
+
     supabase.table("payments").insert({
         "student_id": student["id"],
         "paid_lessons": 0,
@@ -48,29 +60,47 @@ def add_student(name: str, level: str = "B1", contact: str = "") -> dict:
     }).execute()
     return student
 
+@st.cache_data(ttl=60, show_spinner=False)
 def get_students() -> list[dict]:
     if not supabase: return []
     res = supabase.table("students").select("*").order("name").execute()
     return res.data
 
 def delete_student(student_id: str) -> None:
+    st.cache_data.clear()
     if not supabase: return
     supabase.table("students").delete().eq("id", student_id).execute()
 
+@st.cache_data(ttl=60, show_spinner=False)
 def get_student_by_id(student_id: str) -> Optional[dict]:
     if not supabase: return None
     res = supabase.table("students").select("*").eq("id", student_id).execute()
     return res.data[0] if res.data else None
 
+@st.cache_data(ttl=60, show_spinner=False)
 def get_student_name(student_id: str) -> str:
     s = get_student_by_id(student_id)
     return s["name"] if s else "Unknown"
 
+@st.cache_data(ttl=60, show_spinner=False)
+def get_student_by_telegram(username: str) -> Optional[dict]:
+    """Find a student by their Telegram username (without @)."""
+    if not supabase: return None
+    clean = username.lower().lstrip("@")
+    res = supabase.table("students").select("*").execute()
+    for s in res.data:
+        tg = (s.get("telegram_username") or "").lower().lstrip("@")
+        if tg == clean:
+            return s
+    return None
+
 def update_student(student_id: str, updates: dict) -> None:
+    st.cache_data.clear()
     if not supabase: return
     supabase.table("students").update(updates).eq("id", student_id).execute()
 
 def link_telegram(student_id: str, username: str) -> None:
+    st.cache_data.clear()
     if not supabase: return
     supabase.table("students").update({"telegram_username": username.replace("@", "")}).eq("id", student_id).execute()
 
@@ -79,7 +109,18 @@ def link_telegram(student_id: str, username: str) -> None:
 # LESSONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def check_time_available(date_str: str, time_str: str, exclude_lesson_id: str = None) -> bool:
+    if not supabase: return True
+    query = supabase.table("lessons").select("id").eq("date", date_str).eq("time", time_str).eq("status", "scheduled")
+    if exclude_lesson_id:
+        query = query.neq("id", exclude_lesson_id)
+    res = query.execute()
+    return len(res.data) == 0
+
 def add_lesson(student_id: str, date_str: str, time_str: str, topic: str = "") -> dict:
+    if not check_time_available(date_str, time_str):
+        raise ValueError(f"Время {date_str} {time_str} уже занято другим уроком!")
+    st.cache_data.clear()
     if not supabase: return {}
     res = supabase.table("lessons").insert({
         "student_id": student_id,
@@ -90,26 +131,33 @@ def add_lesson(student_id: str, date_str: str, time_str: str, topic: str = "") -
     }).execute()
     return res.data[0]
 
+@st.cache_data(ttl=60, show_spinner=False)
 def get_lessons_for_student(student_id: str) -> list[dict]:
     if not supabase: return []
     res = supabase.table("lessons").select("*").eq("student_id", student_id).execute()
     return res.data
 
+@st.cache_data(ttl=60, show_spinner=False)
 def get_all_lessons() -> list[dict]:
     if not supabase: return []
     res = supabase.table("lessons").select("*").execute()
     return res.data
 
+@st.cache_data(ttl=60, show_spinner=False)
 def get_upcoming_lessons() -> list[dict]:
     if not supabase: return []
     res = supabase.table("lessons").select("*").eq("status", "scheduled").execute()
     return res.data
 
 def update_lesson_status(lesson_id: str, new_status: str) -> None:
+    st.cache_data.clear()
     if not supabase: return
     supabase.table("lessons").update({"status": new_status}).eq("id", lesson_id).execute()
 
 def reschedule_lesson(lesson_id: str, new_date: str, new_time: str) -> None:
+    if not check_time_available(new_date, new_time, exclude_lesson_id=lesson_id):
+        raise ValueError(f"Время {new_date} {new_time} уже занято другим уроком!")
+    st.cache_data.clear()
     if not supabase: return
     supabase.table("lessons").update({
         "date": new_date,
@@ -117,23 +165,33 @@ def reschedule_lesson(lesson_id: str, new_date: str, new_time: str) -> None:
         "status": "rescheduled"
     }).eq("id", lesson_id).execute()
 
-def mark_lesson_conducted(lesson_id: str) -> None:
-    if not supabase: return
+def mark_lesson_conducted(lesson_id: str) -> bool:
+    st.cache_data.clear()
+    """Mark a lesson as conducted and increment conducted_lessons counter.
+    Returns True if the student's balance is at or below 0 (payment warning needed).
+    """
+    if not supabase: return False
     res = supabase.table("lessons").select("*").eq("id", lesson_id).execute()
-    if not res.data: return
+    if not res.data: return False
     lesson = res.data[0]
-    
+
     supabase.table("lessons").update({"status": "conducted"}).eq("id", lesson_id).execute()
-    
+
     # Increment conducted lessons
     pay_res = supabase.table("payments").select("*").eq("student_id", lesson["student_id"]).execute()
     if pay_res.data:
         curr = pay_res.data[0]
+        new_conducted = curr.get("conducted_lessons", 0) + 1
         supabase.table("payments").update({
-            "conducted_lessons": curr.get("conducted_lessons", 0) + 1
+            "conducted_lessons": new_conducted
         }).eq("student_id", lesson["student_id"]).execute()
+        # Check if balance <= 0
+        paid = curr.get("paid_lessons", 0)
+        return (paid - new_conducted) <= 0
+    return False
 
 def delete_lesson(lesson_id: str) -> None:
+    st.cache_data.clear()
     if not supabase: return
     supabase.table("lessons").delete().eq("id", lesson_id).execute()
 
@@ -151,6 +209,7 @@ def record_payment(student_id: str, paid_lessons: int, amount: float = None) -> 
             "paid_lessons": curr.get("paid_lessons", 0) + paid_lessons
         }).eq("student_id", student_id).execute()
 
+@st.cache_data(ttl=60, show_spinner=False)
 def get_payment_balance(student_id: str) -> dict:
     if not supabase: return {"paid": 0, "conducted": 0, "balance": 0}
     res = supabase.table("payments").select("*").eq("student_id", student_id).execute()
@@ -161,11 +220,12 @@ def get_payment_balance(student_id: str) -> dict:
         return {"paid": paid, "conducted": conducted, "balance": paid - conducted}
     return {"paid": 0, "conducted": 0, "balance": 0}
 
+@st.cache_data(ttl=60, show_spinner=False)
 def get_all_payment_summaries() -> list[dict]:
     if not supabase: return []
     students = supabase.table("students").select("*").execute().data
     payments = supabase.table("payments").select("*").execute().data
-    
+
     p_map = {p["student_id"]: p for p in payments}
     summaries = []
     for s in students:
@@ -188,7 +248,8 @@ def get_all_payment_summaries() -> list[dict]:
 # HOMEWORK
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def create_homework(student_id: str, assignment: str) -> dict:
+def create_homework(student_id: str, assignment: str, due_date: str = "") -> dict:
+    """Create a homework record. due_date is optional (YYYY-MM-DD)."""
     if not supabase: return {}
     res = supabase.table("homework").insert({
         "student_id": student_id,
@@ -197,11 +258,20 @@ def create_homework(student_id: str, assignment: str) -> dict:
     }).execute()
     return res.data[0]
 
+@st.cache_data(ttl=60, show_spinner=False)
 def get_all_homework() -> list[dict]:
     if not supabase: return []
-    res = supabase.table("homework").select("*").execute()
+    res = supabase.table("homework").select("*").order("created_at", desc=True).execute()
     return res.data
 
+@st.cache_data(ttl=60, show_spinner=False)
+def get_homework_by_id(hw_id: str) -> Optional[dict]:
+    """Retrieve a single homework record by its ID."""
+    if not supabase: return None
+    res = supabase.table("homework").select("*").eq("id", hw_id).execute()
+    return res.data[0] if res.data else None
+
+@st.cache_data(ttl=60, show_spinner=False)
 def get_pending_homeworks() -> list[dict]:
     if not supabase: return []
     res = supabase.table("homework").select("*").eq("status", "sent").execute()
@@ -211,53 +281,148 @@ def get_pending_homeworks() -> list[dict]:
 get_pending_homework = get_pending_homeworks
 
 def mark_homework_delivered(hw_id: str) -> None:
+    st.cache_data.clear()
     if not supabase: return
-    supabase.table("homework").update({"status": "delivered"}).eq("id", hw_id).execute()
+    supabase.table("homework").update({"status": "delivered", "tg_delivered": True}).eq("id", hw_id).execute()
+
+def submit_homework(hw_id: str, student_answer: str) -> None:
+    """Record the student's answer for a homework assignment."""
+    if not supabase: return
+    supabase.table("homework").update({
+        "status": "submitted",
+        "student_answer": student_answer,
+    }).eq("id", hw_id).execute()
+
+def save_homework_check(hw_id: str, feedback: str, grade: str = "") -> None:
+    st.cache_data.clear()
+    """Save AI check results for a homework."""
+    if not supabase: return
+    supabase.table("homework").update({
+        "status": "checked",
+        "check_result": feedback,
+        "grade": grade,
+    }).eq("id", hw_id).execute()
 
 def update_homework(hw_id: str, updates: dict) -> None:
+    st.cache_data.clear()
     if not supabase: return
     supabase.table("homework").update(updates).eq("id", hw_id).execute()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# MATERIALS (Local for now)
+# MATERIALS — Supabase Storage & DB for books and audio files
 # ═══════════════════════════════════════════════════════════════════════════════
 
-import json
-MATERIALS_DB = Path(__file__).parent / "materials.json"
+# ─── Books ────────────────────────────────────────────────────────────────────
 
-def _load_materials():
-    if MATERIALS_DB.exists():
-        with open(MATERIALS_DB, "r") as f:
-            return json.load(f)
-    return {"books": [], "audio": []}
+def add_book(title: str, filename: str, file_type: str = "image", file_bytes: bytes = b"") -> None:
+    st.cache_data.clear()
+    """Add a book to the library."""
+    if not supabase: return
+    
+    # Upload to Supabase Storage
+    try:
+        supabase.storage.from_("materials").upload(filename, file_bytes)
+    except Exception as e:
+        print(f"Error uploading file: {e}")
 
-def _save_materials(data):
-    with open(MATERIALS_DB, "w") as f:
-        json.dump(data, f)
+    # Add to database
+    supabase.table("materials_books").insert({
+        "title": title,
+        "filename": filename,
+        "file_type": file_type,
+        "file_path": filename,
+    }).execute()
 
-def add_book(title: str, filename: str) -> None:
-    data = _load_materials()
-    data["books"].append({"title": title, "filename": filename})
-    _save_materials(data)
+def get_file(filename: str, bucket: str = "materials") -> bytes:
+    """Download file bytes from Supabase storage."""
+    if not supabase: return b""
+    try:
+        res = supabase.storage.from_(bucket).download(filename)
+        return res
+    except Exception as e:
+        print(f"Error downloading file: {e}")
+        return b""
 
+@st.cache_data(ttl=60, show_spinner=False)
 def get_books() -> list[dict]:
-    return _load_materials()["books"]
+    if not supabase: return []
+    res = supabase.table("materials_books").select("*").order("created_at", desc=True).execute()
+    return res.data
 
-def delete_book(filename: str) -> None:
-    data = _load_materials()
-    data["books"] = [b for b in data["books"] if b["filename"] != filename]
-    _save_materials(data)
+def delete_book(book_id: str) -> None:
+    st.cache_data.clear()
+    """Delete a book by its unique ID. Also removes the file from storage."""
+    if not supabase: return
+    res = supabase.table("materials_books").select("*").eq("id", book_id).execute()
+    if res.data:
+        filename = res.data[0].get("filename")
+        if filename:
+            try:
+                supabase.storage.from_("materials").remove([filename])
+            except Exception:
+                pass
+        supabase.table("materials_books").delete().eq("id", book_id).execute()
 
-def add_audio_file(title: str, filename: str) -> None:
-    data = _load_materials()
-    data["audio"].append({"title": title, "filename": filename})
-    _save_materials(data)
+@st.cache_data(ttl=60, show_spinner=False)
+def get_book_file(filename: str) -> bytes:
+    """Download book file from Supabase Storage."""
+    if not supabase: return b""
+    try:
+        return supabase.storage.from_("materials").download(filename)
+    except Exception as e:
+        print(f"Error downloading {filename}: {e}")
+        return b""
 
+
+# ─── Audio Files ──────────────────────────────────────────────────────────────
+
+def add_audio_file(title: str, filename: str, file_bytes: bytes, book_id: str = "",
+                   topic: str = "", level: str = "B2") -> None:
+    """Add an audio file to the library."""
+    if not supabase: return
+    
+    try:
+        supabase.storage.from_("materials").upload(filename, file_bytes)
+    except Exception as e:
+        print(f"Error uploading audio file: {e}")
+
+    supabase.table("materials_audio").insert({
+        "title": title,
+        "filename": filename,
+        "file_path": filename,
+        "book_id": book_id,
+        "topic": topic,
+        "level": level,
+    }).execute()
+
+@st.cache_data(ttl=60, show_spinner=False)
 def get_audio_files() -> list[dict]:
-    return _load_materials()["audio"]
+    if not supabase: return []
+    res = supabase.table("materials_audio").select("*").order("created_at", desc=True).execute()
+    return res.data
 
-def delete_audio_file(filename: str) -> None:
-    data = _load_materials()
-    data["audio"] = [a for a in data["audio"] if a["filename"] != filename]
-    _save_materials(data)
+def delete_audio_file(audio_id: str) -> None:
+    st.cache_data.clear()
+    """Delete an audio file by its unique ID. Also removes the file from storage."""
+    if not supabase: return
+    res = supabase.table("materials_audio").select("*").eq("id", audio_id).execute()
+    if res.data:
+        filename = res.data[0].get("filename")
+        if filename:
+            try:
+                supabase.storage.from_("materials").remove([filename])
+            except Exception:
+                pass
+        supabase.table("materials_audio").delete().eq("id", audio_id).execute()
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_audio_file(filename: str) -> bytes:
+    """Download audio file from Supabase Storage."""
+    if not supabase: return b""
+    try:
+        return supabase.storage.from_("materials").download(filename)
+    except Exception as e:
+        print(f"Error downloading {filename}: {e}")
+        return b""
+
