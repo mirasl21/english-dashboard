@@ -145,7 +145,7 @@ def render():
                             label="⬇️ Download Audio",
                             data=audio_bytes,
                             file_name=audio["filename"],
-                            mime=f"audio/{audio_path.suffix.lstrip('.')}",
+                            mime=f"audio/{suffix}",
                             key=f"dl_audio_{audio['id']}",
                         )
                     with col_del_audio:

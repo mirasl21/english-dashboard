@@ -10,6 +10,12 @@ import io
 import json
 from datetime import datetime, date, time as dt_time, timedelta
 
+def _get_notion_creds():
+    """Return (token, db_id) from environment or (None, None)."""
+    token = os.environ.get("NOTION_TOKEN")
+    db_id = os.environ.get("NOTION_DB_ID")
+    return (token, db_id) if token and db_id else (None, None)
+
 def render():
     st.markdown("### 📅 Lesson Schedule")
     st.markdown(
@@ -48,13 +54,10 @@ def render():
                         sched_topic,
                     )
                     # Push to Notion if configured
-                    from dotenv import dotenv_values
-                    env_vars = dotenv_values(".env")
-                    notion_token = env_vars.get("NOTION_TOKEN") or os.environ.get("NOTION_TOKEN")
-                    notion_db_id = env_vars.get("NOTION_DB_ID") or os.environ.get("NOTION_DB_ID")
-                    if notion_token and notion_db_id:
+                    n_tok, n_db = _get_notion_creds()
+                    if n_tok and n_db:
                         notion_sync.push_lesson_to_notion(
-                            notion_token, notion_db_id,
+                            n_tok, n_db,
                             sched_student["name"],
                             sched_date.isoformat(),
                             sched_time.strftime("%H:%M"),
@@ -118,10 +121,7 @@ def render():
                                     if st.button("✅ Confirm — Add this lesson", key="ai_confirm_add"):
                                         try:
                                             dm.add_lesson(matched_student["id"], new_d, new_t, topic)
-                                            from dotenv import dotenv_values
-                                            env_vars = dotenv_values(".env")
-                                            n_tok = env_vars.get("NOTION_TOKEN") or os.environ.get("NOTION_TOKEN")
-                                            n_db = env_vars.get("NOTION_DB_ID") or os.environ.get("NOTION_DB_ID")
+                                            n_tok, n_db = _get_notion_creds()
                                             if n_tok and n_db:
                                                 notion_sync.push_lesson_to_notion(n_tok, n_db, student_name, new_d, new_t, topic)
                                             st.success(f"Added lesson for {student_name} on {new_d} at {new_t}")
@@ -176,12 +176,8 @@ def render():
                 with col_done:
                     if st.button("✅", key=f"done_{lesson['id']}", help="Mark as conducted"):
                         needs_payment = dm.mark_lesson_conducted(lesson["id"])
-                        from dotenv import dotenv_values
-                        env_vars = dotenv_values(".env")
-                        n_tok = env_vars.get("NOTION_TOKEN") or os.environ.get("NOTION_TOKEN")
-                        n_db = env_vars.get("NOTION_DB_ID") or os.environ.get("NOTION_DB_ID")
+                        n_tok, n_db = _get_notion_creds()
                         if n_tok and n_db:
-                            import notion_sync
                             notion_sync.update_lesson_status_in_notion(n_tok, n_db, s_name, lesson['date'], "Done")
                         if needs_payment:
                             st.toast(f"💸 {s_name} — пора платить!", icon="🔴")
@@ -193,12 +189,8 @@ def render():
                 with col_cancel:
                     if st.button("❌", key=f"canc_{lesson['id']}", help="Cancel"):
                         dm.update_lesson_status(lesson["id"], "cancelled")
-                        from dotenv import dotenv_values
-                        env_vars = dotenv_values(".env")
-                        n_tok = env_vars.get("NOTION_TOKEN") or os.environ.get("NOTION_TOKEN")
-                        n_db = env_vars.get("NOTION_DB_ID") or os.environ.get("NOTION_DB_ID")
+                        n_tok, n_db = _get_notion_creds()
                         if n_tok and n_db:
-                            import notion_sync
                             notion_sync.delete_lesson_in_notion(n_tok, n_db, s_name, lesson['date'])
                         st.rerun()
 
@@ -213,12 +205,8 @@ def render():
                         if st.button("Save", key=f"save_resc_{lesson['id']}"):
                             try:
                                 dm.reschedule_lesson(lesson["id"], new_d.isoformat(), new_t.strftime("%H:%M"))
-                                from dotenv import dotenv_values
-                                env_vars = dotenv_values(".env")
-                                n_tok = env_vars.get("NOTION_TOKEN") or os.environ.get("NOTION_TOKEN")
-                                n_db = env_vars.get("NOTION_DB_ID") or os.environ.get("NOTION_DB_ID")
+                                n_tok, n_db = _get_notion_creds()
                                 if n_tok and n_db:
-                                    import notion_sync
                                     notion_sync.update_lesson_in_notion(n_tok, n_db, s_name, lesson['date'], new_d.isoformat(), new_t.strftime("%H:%M"), lesson.get('topic', ''))
                                 del st.session_state[f"resc_open_{lesson['id']}"]
                                 st.rerun()

@@ -18,7 +18,7 @@ from datetime import date
 from dotenv import load_dotenv
 
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 import data_manager as dm
 import notion_sync
@@ -266,7 +266,6 @@ async def handle_homework_text(update: Update, text: str, level: str):
     )
 
     try:
-        from telegram_bot import call_ai
         ai_response = await call_ai(prompt)
         await update.message.reply_text(ai_response, parse_mode="Markdown")
     except Exception as e:
@@ -305,15 +304,14 @@ async def handle_homework_photos(update: Update, text: str, key_bytes: bytes, st
         await update.message.reply_text(f"❌ Ошибка при обращении к AI: {e}")
 
 async def auto_complete_past_lessons():
+    from datetime import datetime, timedelta
+    from data_manager import get_all_lessons, mark_lesson_conducted, get_student_name
+
     while True:
         try:
             notion_token = os.environ.get("NOTION_TOKEN")
             notion_db = os.environ.get("NOTION_DB_ID")
             if notion_token and notion_db:
-                import notion_sync
-                from data_manager import get_all_lessons, mark_lesson_conducted, get_student_name
-                from datetime import datetime, timedelta
-                
                 now = datetime.now()
                 lessons = await asyncio.to_thread(get_all_lessons)
                 
@@ -334,7 +332,7 @@ async def auto_complete_past_lessons():
             
         await asyncio.sleep(1800)
 
-async def post_init(application: Application):
+async def post_init(application: Application) -> None:
     asyncio.create_task(auto_complete_past_lessons())
 
 if __name__ == "__main__":

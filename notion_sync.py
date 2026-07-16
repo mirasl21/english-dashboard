@@ -78,27 +78,20 @@ def push_lesson_to_notion(
 
 def find_lesson_in_notion(token: str, database_id: str, student_name: str, lesson_date: str) -> Optional[str]:
     """Find a lesson in Notion by student name and date. Returns page_id if found."""
-    import httpx
     try:
-        url = f"https://api.notion.com/v1/databases/{database_id}/query"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Notion-Version": "2022-06-28",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "filter": {
+        client = _get_client(token)
+        response = client.databases.query(
+            database_id=database_id,
+            filter={
                 "and": [
                     {"property": "Student", "title": {"equals": student_name}},
-                    {"property": "Date", "date": {"equals": lesson_date}}
+                    {"property": "Date", "date": {"equals": lesson_date}},
                 ]
-            }
-        }
-        response = httpx.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        data = response.json()
-        if data.get("results"):
-            return data["results"][0]["id"]
+            },
+        )
+        results = response.get("results", [])
+        if results:
+            return results[0]["id"]
         return None
     except Exception as e:
         print(f"Error finding lesson in Notion: {e}")
