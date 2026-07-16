@@ -36,11 +36,11 @@ def render():
             with st.spinner("Analyzing essay grammar…"):
                 prompt = (
                     f"You are a professional English ESL teacher. Analyze this writing "
-                    f"submitted by a student targeting {st.session_state.get("level_code", "B2")} level.\n\n"
+                    f"submitted by a student targeting {st.session_state.get('level_code', 'B2')} level.\n\n"
                     f"TEXT:\n\"\"\"\n{student_text}\n\"\"\"\n\n"
                     f"Provide a clear, simple markdown response containing:\n"
                     f"1. A corrected version of the text.\n"
-                    f"2. A bulleted list explaining the grammar mistakes and rules suitable for level {st.session_state.get("level_code", "B2")}.\n"
+                    f"2. A bulleted list explaining the grammar mistakes and rules suitable for level {st.session_state.get('level_code', 'B2')}.\n"
                     f"Note: Assume this is for an ONLINE lesson (Zoom/Miro), so provide suggestions that are easy to screen-share or type in a chat.\n"
                     f"Keep it clean and easy to read. Do NOT use complex JSON formatting."
                 )
