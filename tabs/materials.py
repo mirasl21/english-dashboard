@@ -136,7 +136,7 @@ def render():
                         with st.spinner("AI is analyzing the textbook pages..."):
                             gen_prompt = (
                                 f"Analyze this textbook page and generate teaching materials.\n"
-                                f"Target Student Level: {st.session_state.get("level_code", "B2")}\n"
+                                f"Target Student Level: {st.session_state.get('level_code', 'B2')}\n"
                                 f"Context: Online lessons (Zoom, screen sharing)\n\n"
                                 f"Generate the following:\n"
                             )
@@ -150,7 +150,7 @@ def render():
                             try:
                                 # Use the first page image for vision AI
                                 img_b64 = base64.b64encode(selected_page_images[0]).decode("utf-8")
-                                raw = call_vision_ai(gen_prompt, img_b64, st.session_state.api_key, st.session_state.get("provider", "OpenAI (GPT-4o)"))
+                                raw = call_vision_ai(gen_prompt, img_b64, st.session_state.api_key, st.session_state.get('provider', 'OpenAI (GPT-4o)'))
 
                                 st.markdown("---")
                                 st.markdown(raw)
@@ -211,7 +211,7 @@ def render():
                         mat_prompt = (
                             f"Create a comprehensive study material package for an English lesson.\n"
                             f"Topic: \"{mat_topic}\"\n"
-                            f"Target Student Level: {st.session_state.get("level_code", "B2")}\n"
+                            f"Target Student Level: {st.session_state.get('level_code', 'B2')}\n"
                             f"Context: Online lessons (Zoom, screen sharing)\n\n"
                             f"Include the following sections:\n"
                         )
@@ -225,7 +225,7 @@ def render():
                         )
 
                         try:
-                            raw = call_text_ai(mat_prompt, st.session_state.api_key, st.session_state.get("provider", "OpenAI (GPT-4o)"))
+                            raw = call_text_ai(mat_prompt, st.session_state.api_key, st.session_state.get('provider', 'OpenAI (GPT-4o)'))
 
                             st.markdown("---")
                             st.markdown(raw)

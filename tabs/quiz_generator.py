@@ -46,7 +46,7 @@ def render():
             with st.spinner("Creating multiple choice assessment..."):
                 prompt = (
                     f"Create a 5-question multiple-choice quiz testing knowledge on: \"{quiz_topic}\".\n"
-                    f"Target Student CEFR Level: {st.session_state.get("level_code", "B2")}.\n"
+                    f"Target Student CEFR Level: {st.session_state.get('level_code', 'B2')}.\n"
                     f"Provide exactly 4 options labeled A, B, C, and D for each item.\n\n"
                     f"Format the output as a simple, easy-to-read markdown document.\n"
                     f"Include an 'Answer Key & Explanations' section at the bottom.\n"
@@ -54,7 +54,7 @@ def render():
                     f"Do NOT use JSON or complex formatting."
                 )
                 try:
-                    raw = call_text_ai(prompt, st.session_state.api_key, st.session_state.get("provider", "OpenAI (GPT-4o)"))
+                    raw = call_text_ai(prompt, st.session_state.api_key, st.session_state.get('provider', 'OpenAI (GPT-4o)'))
                     st.session_state.quiz_data = raw
                     st.session_state.quiz_key_topic = quiz_topic
                     st.rerun()
@@ -62,7 +62,7 @@ def render():
                     st.error(f"Error generating quiz content: {e}")
 
     if st.session_state.quiz_data:
-        st.markdown(f"#### 📝 Topic: *{st.session_state.quiz_key_topic}* — Level {st.session_state.get("level_code", "B2")}")
+        st.markdown(f"#### 📝 Topic: *{st.session_state.quiz_key_topic}* — Level {st.session_state.get('level_code', 'B2')}")
         st.markdown("---")
         st.markdown(st.session_state.quiz_data)
     

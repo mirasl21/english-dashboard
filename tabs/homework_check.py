@@ -108,7 +108,7 @@ def render():
                 with st.spinner("AI is checking the homework..."):
                     hw_prompt = (
                         f"You are a professional English teacher checking homework.\n"
-                        f"Student Level: {st.session_state.get("level_code", "B2")}\n\n"
+                        f"Student Level: {st.session_state.get('level_code', 'B2')}\n\n"
                         f"ASSIGNMENT:\n\"\"\"\n{hw_assignment}\n\"\"\"\n\n"
                     )
                     if has_text_answer:
@@ -128,9 +128,9 @@ def render():
                     try:
                         if has_image_answer:
                             img_b64 = image_to_base64(hw_image)
-                            raw = call_vision_ai(hw_prompt, img_b64, st.session_state.api_key, st.session_state.get("provider", "OpenAI (GPT-4o)"))
+                            raw = call_vision_ai(hw_prompt, img_b64, st.session_state.api_key, st.session_state.get('provider', 'OpenAI (GPT-4o)'))
                         else:
-                            raw = call_text_ai(hw_prompt, st.session_state.api_key, st.session_state.get("provider", "OpenAI (GPT-4o)"))
+                            raw = call_text_ai(hw_prompt, st.session_state.api_key, st.session_state.get('provider', 'OpenAI (GPT-4o)'))
 
                         st.markdown("---")
                         st.markdown(raw)

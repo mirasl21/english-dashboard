@@ -125,7 +125,7 @@ def render():
                 )
             
                 base_prompt = (
-                    f"Create a 60-minute Lesson Plan for a class of {planner_class_size} students at level {st.session_state.get("level_code", "B2")}.\n"
+                    f"Create a 60-minute Lesson Plan for a class of {planner_class_size} students at level {st.session_state.get('level_code', 'B2')}.\n"
                     f"{objective_line}\n"
                     f"{topic_or_image}\n\n"
                     f"Structure your response as a clean, simple markdown document including:\n"
@@ -138,9 +138,9 @@ def render():
                 try:
                     if has_image:
                         img_b64 = base64.b64encode(planner_img_bytes).decode("utf-8")
-                        raw = call_vision_ai(base_prompt, img_b64, st.session_state.api_key, st.session_state.get("provider", "OpenAI (GPT-4o)"))
+                        raw = call_vision_ai(base_prompt, img_b64, st.session_state.api_key, st.session_state.get('provider', 'OpenAI (GPT-4o)'))
                     else:
-                        raw = call_text_ai(base_prompt, st.session_state.api_key, st.session_state.get("provider", "OpenAI (GPT-4o)"))
+                        raw = call_text_ai(base_prompt, st.session_state.api_key, st.session_state.get('provider', 'OpenAI (GPT-4o)'))
                 
                     st.markdown("---")
                     st.markdown(raw)

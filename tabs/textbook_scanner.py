@@ -113,7 +113,7 @@ def render():
             img_b64 = base64.b64encode(active_img_bytes).decode("utf-8")
             prompt = (
                 f"Analyze the text and topics on this textbook page image.\n"
-                f"Target Student CEFR Level: {st.session_state.get("level_code", "B2")}\n\n"
+                f"Target Student CEFR Level: {st.session_state.get('level_code', 'B2')}\n\n"
                 f"Provide a clean, easy-to-read markdown document containing:\n"
                 f"1. A brief summary of the grammar, topic, and vocabulary covered.\n"
                 f"2. Three unique practice exercises based on the detected topics, tailored for ONLINE classes (e.g. interactive whiteboards, chat typing, or breakout room discussions).\n"
@@ -121,7 +121,7 @@ def render():
                 f"Do NOT use JSON formatting."
             )
             try:
-                raw = call_vision_ai(prompt, img_b64, st.session_state.api_key, st.session_state.get("provider", "OpenAI (GPT-4o)"))
+                raw = call_vision_ai(prompt, img_b64, st.session_state.api_key, st.session_state.get('provider', 'OpenAI (GPT-4o)'))
             
                 st.markdown("---")
                 st.markdown(raw)
