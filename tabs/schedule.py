@@ -114,9 +114,27 @@ def render():
                                 student_name = parsed.get("student_name", "")
                                 matched_student = next((s for s in all_students if s["name"].lower() == student_name.lower()), None)
 
+                                if matched_student:
+                                    teacher_tz_str = os.environ.get("TEACHER_TIMEZONE_NAME", "Asia/Almaty")
+                                    student_tz_str = matched_student.get("contact") or teacher_tz_str
+                                    
+                                    def convert_time(d_str, t_str):
+                                        if not d_str or not t_str: return d_str, t_str
+                                        try:
+                                            from zoneinfo import ZoneInfo
+                                            dt = datetime.strptime(f"{d_str} {t_str}", "%Y-%m-%d %H:%M")
+                                            if student_tz_str != teacher_tz_str:
+                                                dt = dt.replace(tzinfo=ZoneInfo(student_tz_str))
+                                                dt_teacher = dt.astimezone(ZoneInfo(teacher_tz_str))
+                                                return dt_teacher.strftime("%Y-%m-%d"), dt_teacher.strftime("%H:%M")
+                                        except Exception as e:
+                                            print(f"Time conversion error: {e}")
+                                        return d_str, t_str
+
                                 if matched_student and action == "add":
                                     new_d = parsed.get("new_date", "")
                                     new_t = parsed.get("new_time", "14:00")
+                                    new_d, new_t = convert_time(new_d, new_t)
                                     topic = parsed.get("topic", "")
                                     if st.button("✅ Confirm — Add this lesson", key="ai_confirm_add"):
                                         try:
@@ -132,6 +150,7 @@ def render():
                                     old_d = parsed.get("old_date", "")
                                     new_d = parsed.get("new_date", "")
                                     new_t = parsed.get("new_time", "14:00")
+                                    new_d, new_t = convert_time(new_d, new_t)
                                     # Find matching lesson
                                     lessons = dm.get_lessons_for_student(matched_student["id"])
                                     target = next((l for l in lessons if l["date"] == old_d and l["status"] == "scheduled"), None)

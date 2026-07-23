@@ -131,7 +131,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"If it mentions a student name and dates/times, it is a schedule change.\n"
         f"Known students: {', '.join(student_info)}\n"
         f"Today's date: {date.today().isoformat()}\n"
-        f"IMPORTANT: For schedule changes, the teacher is stating times in the STUDENT'S timezone. You must convert these times from the student's timezone to Kazakhstan Time (Asia/Almaty, UTC+05:00) before returning the JSON.\n\n"
+        f"IMPORTANT: Extract the exact time mentioned by the teacher. DO NOT do any timezone conversions. Return the time exactly as stated.\n\n"
         f"Return JSON:\n"
         f'{{"type": "schedule", "student_name": "...", "action": "reschedule|cancel|add", "old_date": "YYYY-MM-DD", "new_date": "YYYY-MM-DD", "new_time": "HH:MM", "added_lessons": [{{"date": "YYYY-MM-DD", "time": "HH:MM"}}], "topic": "..."}}\n'
         f"(Use 'added_lessons' array ONLY when action is 'add'. It can contain one or multiple lessons).\n"
@@ -171,10 +171,35 @@ async def handle_schedule(update: Update, parsed: dict, students: list):
         await update.message.reply_text(f"⚠️ Не нашла ученика с именем {student_name}.")
         return
 
+    # Helper for timezone conversion
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from pytz import timezone as ZoneInfo
+
+    teacher_tz_str = os.environ.get("TEACHER_TIMEZONE_NAME", "Asia/Almaty")
+    student_tz_str = student.get("contact") or teacher_tz_str
+
+    def convert_time(d_str: str, t_str: str):
+        if not d_str or not t_str:
+            return d_str, t_str
+        try:
+            dt = datetime.strptime(f"{d_str} {t_str}", "%Y-%m-%d %H:%M")
+            if student_tz_str != teacher_tz_str:
+                dt = dt.replace(tzinfo=ZoneInfo(student_tz_str))
+                dt_teacher = dt.astimezone(ZoneInfo(teacher_tz_str))
+                return dt_teacher.strftime("%Y-%m-%d"), dt_teacher.strftime("%H:%M")
+        except Exception as e:
+            print(f"Time conversion error: {e}")
+        return d_str, t_str
+
     if action == "reschedule":
         old_d = parsed.get("old_date", "")
         new_d = parsed.get("new_date", "")
         new_t = parsed.get("new_time", "14:00")
+        new_d, new_t = convert_time(new_d, new_t)
+
 
         lessons = await asyncio.to_thread(dm.get_lessons_for_student, student["id"])
         target = next((l for l in lessons if l["date"] == old_d and l["status"] == "scheduled"), None)
@@ -211,11 +236,14 @@ async def handle_schedule(update: Update, parsed: dict, students: list):
         added_lessons = parsed.get("added_lessons", [])
         
         # Fallback to single lesson if AI didn't use added_lessons
+        converted_already = False
         if not added_lessons:
             new_d = parsed.get("new_date", "")
             new_t = parsed.get("new_time", "14:00")
+            new_d, new_t = convert_time(new_d, new_t)
             if new_d:
                 added_lessons.append({"date": new_d, "time": new_t})
+                converted_already = True
                 
         if not added_lessons:
             await update.message.reply_text("⚠️ Не удалось распознать даты для добавления.")
@@ -227,6 +255,8 @@ async def handle_schedule(update: Update, parsed: dict, students: list):
         for lesson in added_lessons:
             d = lesson.get("date", "")
             t = lesson.get("time", "14:00")
+            if not converted_already:
+                d, t = convert_time(d, t)
             if not d: continue
             
             await asyncio.to_thread(dm.add_lesson, student["id"], d, t, topic)
